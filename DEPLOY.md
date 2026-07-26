@@ -55,10 +55,15 @@ Chromium з кешу Playwright.
 
 ## 3. Laravel `.env` (прод)
 
+- Почати з шаблона: `cp .env.example .env`. `backend/.env.example` — канонічний
+  список змінних (сам `.env` у git не потрапляє); якщо додали нову змінну в
+  `config/`, додайте її і в шаблон, інакше на наступному деплої її пропустять
 - `APP_ENV=production`, `APP_DEBUG=false`, `APP_URL=https://<домен>`
 - `DB_CONNECTION=sqlite` (файл лишається; бекапити `database/database.sqlite`)
 - Перенести секрети: `TRELLO_API_KEY`, `TRELLO_TEMPLATE_BOARD_ID`,
-  `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` тощо — з локального `.env`
+  `GOOGLE_OAUTH_CLIENT_ID`/`GOOGLE_OAUTH_CLIENT_SECRET`,
+  `TELEGRAM_BOT_TOKEN`/`TELEGRAM_BOT_USERNAME`/`TELEGRAM_WEBHOOK_SECRET`
+  (див. п. 7а) — з локального `.env`
 - `YAWARE_NODE_BINARY=node`, `YAWARE_WORKER_SCRIPT`/`YAWARE_WORKER_CWD` —
   дефолти підходять, якщо структура тек збережена (`app/` поруч із `backend/`)
 - Скопіювати `backend/storage/app/google/oauth-token.json` (refresh-токен
