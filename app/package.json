@@ -1,0 +1,12 @@
+{
+  "name": "yaware-report-v1",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Automation script for Yaware login and XLS export",
+  "scripts": {
+    "export:xls": "node scripts/export-yaware-xls.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.52.0"
+  }
+}

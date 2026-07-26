@@ -1,0 +1,59 @@
+# ---- Секрети (НІКОЛИ не комітити) ----
+.yaware-credentials.json
+.env
+.env.*
+!.env.example
+!frontend/.env.development
+!frontend/.env.production
+backend/storage/app/google/
+auth.json
+*.pem
+*.key
+
+# ---- Залежності та бандлені рантайми ----
+node_modules/
+vendor/
+browsers/
+node/
+python/
+
+# ---- Збірки ----
+frontend/dist/
+backend/public/build/
+backend/public/hot
+backend/public/storage
+
+# ---- Дані компанії / робочі артефакти ----
+downloads/
+app/downloads/
+screenshots/
+*.xlsx
+*.jpg
+*.png
+!frontend/public/**/*.png
+!frontend/public/**/*.jpg
+!frontend/src/**/*.png
+!frontend/src/**/*.jpg
+backend/storage/app/reports/
+backend/database/*.sqlite
+backend/database/*.sqlite-journal
+
+# ---- Laravel runtime ----
+backend/storage/framework/cache/*
+backend/storage/framework/sessions/*
+backend/storage/framework/testing/*
+backend/storage/framework/views/*
+backend/storage/logs/*
+backend/bootstrap/cache/*
+!backend/bootstrap/cache/.gitignore
+.phpunit.result.cache
+.phpunit.cache/
+
+# ---- Різне ----
+*.log
+*.stackdump
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.tmp.mjs

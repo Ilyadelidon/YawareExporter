@@ -1,0 +1,351 @@
+:root {
+  --app-bg: #EDEDED;
+  --surface: #ffffff;
+  --line: #f0f4f7;
+  --accent: #149d8d;
+  --ink: #149d8d;
+  --text-dim: #6b6b6b;
+  --muted: #8a8a8a;
+  --muted-2: #a8a8a8;
+  --shadow-sm: 0 1px 2px rgba(17, 17, 17, 0.04);
+  --shadow-card: 0 1px 2px rgba(17, 17, 17, 0.04), 0 2px 10px rgba(17, 17, 17, 0.03);
+  --radius: 0;
+
+  font-family: 'Inter', system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Дизайн без заокруглень: перекриває і власні стилі, і компоненти PrimeVue */
+*,
+*::before,
+*::after {
+  border-radius: 0 !important;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: var(--app-bg);
+}
+
+::selection {
+  background: var(--accent);
+  color: #fff;
+}
+
+a {
+  color: var(--accent);
+}
+
+a:hover {
+  color: #444444;
+}
+
+h1 {
+  font-size: 1.6rem;
+  line-height: 1.2;
+  margin: 0 0 1rem;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulseDot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* Shared design-system pieces */
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+.page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 20px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 16px 22px;
+  box-shadow: var(--shadow-card);
+}
+
+.page-head-info {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.page-head-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius);
+  background: var(--app-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.page-head-title {
+  font-size: 16.5px;
+  font-weight: 800;
+  color: var(--ink);
+  letter-spacing: -0.01em;
+}
+
+.page-head-subtitle {
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 1px;
+}
+
+.page-head-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.field-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: 0;
+  padding: 9px 12px;
+}
+
+.field-pill input {
+  border: none;
+  background: none;
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+  outline: none;
+  cursor: pointer;
+}
+
+/* PrimeVue DatePicker усередині .field-pill: інпут зливається з pill,
+   а календар, що випадає, приходить з теми проєкту. */
+.field-pill .p-datepicker-input {
+  border: none;
+  background: none;
+  border-radius: 0;
+  padding: 0;
+  width: 92px;
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+  box-shadow: none;
+  outline: none;
+  cursor: pointer;
+}
+
+.p-datepicker-panel {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 13px;
+  /* view="month" (Табель): сітка місяців має лише відсоткові ширини, тож
+     панель стискається до ширини вузького інпута в pill — тримаємо мінімум. */
+  min-width: 250px;
+}
+
+.btn-accent {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 22px;
+  border-radius: 0;
+  font-family: inherit;
+  font-size: 14.5px;
+  font-weight: 600;
+  border: none;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(17, 17, 17, 0.18);
+}
+
+.btn-accent:hover:not(:disabled) {
+  background: #118779;
+}
+
+.btn-accent:disabled {
+  background: var(--text-dim);
+  cursor: wait;
+  box-shadow: none;
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 0;
+  background: var(--line);
+  color: var(--ink);
+}
+
+.status-badge .dot {
+  width: 6px;
+  height: 6px;
+  /* виняток із глобального border-radius: 0 — крапка лишається круглою */
+  border-radius: 50% !important;
+  background: currentColor;
+}
+
+.status-badge.is-processing .dot {
+  animation: pulseDot 1.4s ease-in-out infinite;
+}
+
+.status-badge.is-pending {
+  color: var(--muted);
+}
+
+.status-badge.is-failed {
+  color: #c2402f;
+  background: #faeeec;
+}
+
+/* Підказки на кшталт «підключіть інтеграції» — замість PrimeVue Message */
+.hint-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  padding: 12px 16px;
+  box-shadow: var(--shadow-sm);
+}
+
+.hint-banner-icon {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--app-bg);
+  color: var(--accent);
+}
+
+.hint-banner-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.hint-banner-text {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-top: 1px;
+}
+
+.skeleton {
+  border-radius: var(--radius);
+  background: linear-gradient(90deg, #f0f4f7 25%, #f2f2f2 37%, #f0f4f7 63%);
+  background-size: 400% 100%;
+  animation: pulseDot 1.4s ease-in-out infinite;
+}
+
+/* Мобільні правила спільних елементів: контроли шапки сторінки стають на
+   повну ширину і переносяться рядками, а не тиснуть сторінку вшир. */
+@media (max-width: 640px) {
+  .page-head {
+    padding: 14px 16px;
+    gap: 14px;
+  }
+
+  .page-head-actions {
+    width: 100%;
+  }
+
+  .page-head-actions > * {
+    flex: 1 1 auto;
+  }
+
+  .field-pill {
+    justify-content: center;
+  }
+
+  /* iOS Safari зумить сторінку при фокусі на полях зі шрифтом < 16px */
+  input.p-inputtext:not([readonly]) {
+    font-size: 16px;
+  }
+}
+
+/* Випадайки монтуються в body, тож їх ширина не обмежена контейнером —
+   на мобільному довгий пункт (назва дошки, імʼя працівника) інакше розтягує
+   сторінку вшир. */
+.p-select-overlay,
+.p-multiselect-overlay,
+.p-autocomplete-overlay,
+.p-datepicker-panel,
+.p-popover {
+  max-width: calc(100vw - 24px);
+}
+
+.p-select-option,
+.p-select-option-label,
+.p-multiselect-option,
+.p-multiselect-option-label,
+.p-autocomplete-option {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* PrimeVue adjustments toward the design language */
+
+.p-datatable .p-datatable-thead > tr > th {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--surface);
+  border-color: var(--line);
+}
+
+.p-datatable .p-datatable-tbody > tr > td {
+  font-size: 13.5px;
+  border-color: var(--line);
+}
+
+.p-datatable .p-datatable-tbody > tr {
+  color: var(--text-dim);
+}
