@@ -40,6 +40,8 @@ Playwright-перевірку облікових даних у Yaware, тому 
 
 - Звіти по робочому часу з Yaware — на вимогу або за розкладом
 - Історія, статистика активностей, Табель (лише для адміністратора)
+- AI-аналіз дня — Claude або DeepSeek звіряє активності з посадою й тасками та
+  виписує незрозумілі сайти (лише для адміністратора)
 - Trello: персональні токени, вибір або створення дошки з інтерфейсу
 - Google Sheets: персональна таблиця — створити нову або підключити наявну
 - Telegram-бот [@TeamReporter\_Bot](https://t.me/TeamReporter_Bot) — сповіщення
@@ -68,8 +70,9 @@ npm ci
 ```
 
 Заповніть у `backend/.env` секрети інтеграцій (`TRELLO_API_KEY`,
-`GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET`, `TELEGRAM_BOT_TOKEN`) —
-без них відповідні розділи просто будуть неактивні.
+`GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET`, `TELEGRAM_BOT_TOKEN`,
+`ANTHROPIC_API_KEY` та/або `DEEPSEEK_API_KEY`) — без них відповідні розділи
+просто будуть неактивні.
 
 Далі одна команда піднімає все — API, обидва воркери черг і Vite:
 
