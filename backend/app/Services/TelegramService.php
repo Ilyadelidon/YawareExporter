@@ -66,6 +66,42 @@ class TelegramService
     }
 
     /**
+     * Технічне сповіщення розробнику (OPS_TELEGRAM_EMAIL): стан ранкової
+     * автогенерації, збої планувальника. Працівникам такі повідомлення не
+     * йдуть — це службовий канал на одну людину.
+     *
+     * Мовчазна відмова тут неприпустима: якщо адресата не знайдено або в нього
+     * не привʼязаний Telegram, у лог іде попередження — інакше сповіщення про
+     * збої самі зникли б непоміченими.
+     */
+    public function notifyOps(string $text, ?string $parseMode = null): void
+    {
+        $email = trim((string) config('services.telegram.ops_email'));
+
+        if ($email === '') {
+            return;
+        }
+
+        // Пошта в базі зберігається так, як її віддав Yaware, тож порівнюємо
+        // без урахування регістру.
+        $user = User::whereRaw('lower(email) = ?', [mb_strtolower($email)])->first();
+
+        if (! $user) {
+            Log::warning("OPS_TELEGRAM_EMAIL={$email}: користувача з такою поштою немає — технічне сповіщення не надіслано.");
+
+            return;
+        }
+
+        if (! $user->telegram_chat_id) {
+            Log::warning("OPS_TELEGRAM_EMAIL={$email}: Telegram не привʼязано — технічне сповіщення не надіслано.");
+
+            return;
+        }
+
+        $this->notify($user, $text, $parseMode);
+    }
+
+    /**
      * Реєструє вебхук бота на APP_URL/api/telegram/webhook із секретом,
      * який Telegram потім шле в заголовку кожного запиту.
      */

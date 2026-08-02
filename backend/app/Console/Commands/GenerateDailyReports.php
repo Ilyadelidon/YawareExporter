@@ -6,6 +6,7 @@ use App\Jobs\GenerateYawareReport;
 use App\Models\Employee;
 use App\Models\Report;
 use App\Services\GoogleSheetsService;
+use App\Services\TelegramService;
 use App\Services\TrelloService;
 use Carbon\CarbonImmutable;
 use Carbon\Exceptions\InvalidFormatException;
@@ -31,10 +32,12 @@ class GenerateDailyReports extends Command
         $this->info("Автогенерація звітів за {$date}.");
 
         $queued = 0;
+        $skipped = [];
 
         foreach (Employee::with('user')->where('active', true)->get() as $employee) {
             if ($reason = $this->skipReason($employee)) {
                 $this->warn("{$employee->name} (#{$employee->id}): пропущено — {$reason}");
+                $skipped[] = "{$employee->name} (#{$employee->id}): {$reason}";
 
                 continue;
             }
@@ -61,7 +64,38 @@ class GenerateDailyReports extends Command
 
         $this->info("У чергу поставлено звітів: {$queued}.");
 
+        $this->notifyOps($date, $queued, $skipped);
+
         return self::SUCCESS;
+    }
+
+    /**
+     * Підсумок прогону розробнику в Telegram. Це водночас сигнал живості
+     * планувальника: повідомлення приходить щобудня, тож його відсутність
+     * і є ознакою, що cron або воркер лягли — інакше про це дізнаєшся
+     * від працівників, у яких не з'явився звіт.
+     *
+     * @param  list<string>  $skipped
+     */
+    private function notifyOps(string $date, int $queued, array $skipped): void
+    {
+        $day = CarbonImmutable::parse($date)->format('d.m.Y');
+
+        $lines = ["🗓 Автогенерація звітів за {$day}", "У чергу поставлено: {$queued}"];
+
+        if ($skipped !== []) {
+            $lines[] = 'Пропущено: '.count($skipped);
+
+            foreach ($skipped as $reason) {
+                $lines[] = "• {$reason}";
+            }
+        }
+
+        if ($queued === 0 && $skipped === []) {
+            $lines[] = 'Активних працівників не знайдено — перевірте список працівників.';
+        }
+
+        app(TelegramService::class)->notifyOps(implode("\n", $lines));
     }
 
     /**

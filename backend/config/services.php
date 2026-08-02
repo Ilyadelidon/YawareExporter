@@ -78,6 +78,10 @@ return [
         'bot_username' => env('TELEGRAM_BOT_USERNAME'),
         // Довільний секрет: Telegram шле його в заголовку кожного вебхука.
         'webhook_secret' => env('TELEGRAM_WEBHOOK_SECRET'),
+        // Пошта того, кому йдуть технічні сповіщення (стан автогенерації,
+        // збої планувальника) — це розробник, а не працівники. Порожнє
+        // значення повністю вимикає їх.
+        'ops_email' => env('OPS_TELEGRAM_EMAIL'),
     ],
 
     'trello' => [

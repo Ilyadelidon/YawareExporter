@@ -1,5 +1,6 @@
 <?php
 
+use App\Services\TelegramService;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schedule;
@@ -15,4 +16,13 @@ Schedule::command('reports:generate-daily')
     ->at('07:00')
     ->timezone('Europe/Kyiv')
     ->withoutOverlapping()
-    ->appendOutputTo(storage_path('logs/scheduler.log'));
+    ->appendOutputTo(storage_path('logs/scheduler.log'))
+    // Команда сама шле підсумок прогону; сюди потрапляємо, лише якщо вона
+    // впала до кінця (виняток, ненульовий код виходу) — тоді підсумку не
+    // буде взагалі, і без цього сигналу ранок минув би тихо.
+    ->onFailure(function () {
+        app(TelegramService::class)->notifyOps(
+            "❌ Планувальник: reports:generate-daily завершилась помилкою.\n"
+            .'Деталі — у storage/logs/scheduler.log і laravel.log на сервері.'
+        );
+    });
