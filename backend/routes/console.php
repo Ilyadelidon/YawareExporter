@@ -26,3 +26,10 @@ Schedule::command('reports:generate-daily')
             .'Деталі — у storage/logs/scheduler.log і laravel.log на сервері.'
         );
     });
+
+// Активна перевірка стану: сама шукає ознаки аварії й сповіщає, замість того
+// щоб покладатись на здогад «підсумку не прийшло — мабуть, щось не так».
+Schedule::command('ops:healthcheck')
+    ->everyThirtyMinutes()
+    ->withoutOverlapping()
+    ->appendOutputTo(storage_path('logs/scheduler.log'));

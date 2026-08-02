@@ -1,0 +1,256 @@
+<?php
+
+namespace App\Services;
+
+use App\Models\DailyAnalysis;
+use App\Models\Report;
+use Carbon\CarbonImmutable;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\File;
+use Throwable;
+
+/**
+ * Активний контроль стану сервісу: шукає ознаки того, що щось лягло, і дає
+ * список проблем людською мовою.
+ *
+ * Свідомо тримає стан у файлі, а не в кеші: cache:clear на кожному деплої
+ * стер би позначку про останній ранковий прогін, і монітор одразу після
+ * деплою кричав би про неіснуючу аварію.
+ *
+ * Межа методу: усе це виконується на тому ж сервері. Якщо ляже сам сервер,
+ * cron або PHP — доповісти буде нікому, і аварію побачить лише зовнішній
+ * пінг (OPS_HEARTBEAT_URL, див. HeartbeatService).
+ */
+class OpsMonitor
+{
+    /** Звіт, що висить у processing довше за це, — покинутий воркером. */
+    private const STUCK_REPORT_MINUTES = 25;
+
+    /** Скільки чекати після планового 07:00, перш ніж бити на сполох. */
+    private const MORNING_GRACE_HOUR = 8;
+
+    /** Джоба, що стоїть у черзі довше, — ознака мертвого воркера. */
+    private const QUEUE_STALL_MINUTES = 30;
+
+    /** Менше вільного місця — і звіти перестануть зберігатись. */
+    private const MIN_FREE_DISK_PERCENT = 10;
+
+    /** Та сама проблема не повторюється частіше, ніж раз на стільки годин. */
+    private const REPEAT_ALERT_HOURS = 6;
+
+    private string $statePath;
+
+    public function __construct()
+    {
+        $this->statePath = storage_path('app/ops-state.json');
+    }
+
+    /**
+     * Позначка успішного ранкового прогону — за нею монітор розуміє, що
+     * автогенерація сьогодні взагалі відбувалась.
+     */
+    public function recordDailyRun(?CarbonImmutable $at = null): void
+    {
+        $at ??= CarbonImmutable::now('Europe/Kyiv');
+
+        $this->writeState(['last_daily_run' => $at->toDateString()] + $this->state());
+    }
+
+    /**
+     * Усе, що зараз виглядає як аварія. Порожній масив — усе гаразд.
+     *
+     * @return list<string>
+     */
+    public function problems(): array
+    {
+        $now = CarbonImmutable::now('Europe/Kyiv');
+
+        return array_values(array_filter([
+            $this->missedMorningRun($now),
+            $this->failedReports($now),
+            $this->stuckReports($now),
+            $this->failedAnalyses($now),
+            $this->failedJobs(),
+            $this->stalledQueue($now),
+            $this->lowDisk(),
+        ]));
+    }
+
+    /**
+     * Чи слід зараз турбувати людину цим набором проблем. Та сама проблема,
+     * що тримається днями, інакше слала б повідомлення щопівгодини — і її
+     * швидко почали б ігнорувати разом з усіма іншими.
+     *
+     * @param  list<string>  $problems
+     */
+    public function shouldAlert(array $problems): bool
+    {
+        if ($problems === []) {
+            return false;
+        }
+
+        $state = $this->state();
+        $signature = md5(implode('|', $problems));
+
+        if (($state['last_alert_signature'] ?? null) !== $signature) {
+            return true;
+        }
+
+        $sentAt = $state['last_alert_at'] ?? null;
+
+        return ! $sentAt || CarbonImmutable::parse($sentAt)->addHours(self::REPEAT_ALERT_HOURS)->isPast();
+    }
+
+    /**
+     * @param  list<string>  $problems
+     */
+    public function markAlerted(array $problems): void
+    {
+        // Нові значення ліворуч: при збігу ключів масивний «+» лишає саме їх.
+        $this->writeState([
+            'last_alert_signature' => md5(implode('|', $problems)),
+            'last_alert_at' => CarbonImmutable::now()->toIso8601String(),
+        ] + $this->state());
+    }
+
+    /**
+     * Ранковий прогін не відбувся: будній день, минула година запасу, а
+     * позначки за сьогодні немає. Це ловить мертвий cron і падіння команди
+     * до того, як вона встигла щось повідомити.
+     */
+    private function missedMorningRun(CarbonImmutable $now): ?string
+    {
+        if ($now->isWeekend() || $now->hour < self::MORNING_GRACE_HOUR) {
+            return null;
+        }
+
+        $lastRun = $this->state()['last_daily_run'] ?? null;
+
+        if ($lastRun === $now->toDateString()) {
+            return null;
+        }
+
+        $seen = $lastRun ? "останній прогін: {$lastRun}" : 'жодного прогону не зафіксовано';
+
+        return "Ранкової автогенерації сьогодні не було ({$seen}). Перевірте cron під www-data і schedule:run.";
+    }
+
+    private function failedReports(CarbonImmutable $now): ?string
+    {
+        $failed = Report::where('status', Report::STATUS_FAILED)
+            ->whereDate('updated_at', $now->toDateString())
+            ->with('employee')
+            ->get();
+
+        if ($failed->isEmpty()) {
+            return null;
+        }
+
+        $names = $failed->map(fn (Report $report) => $report->employee?->name ?? "звіт #{$report->id}")
+            ->unique()
+            ->implode(', ');
+
+        return "Звітів упало сьогодні: {$failed->count()} ({$names}).";
+    }
+
+    /**
+     * Звіт застряг у processing: воркер узяв джобу й помер, тому статус уже
+     * ніхто не змінить — сам по собі такий звіт не «розсмокчеться».
+     */
+    private function stuckReports(CarbonImmutable $now): ?string
+    {
+        $stuck = Report::where('status', Report::STATUS_PROCESSING)
+            ->where('updated_at', '<', $now->subMinutes(self::STUCK_REPORT_MINUTES))
+            ->count();
+
+        return $stuck > 0
+            ? "Звітів зависло в статусі processing: {$stuck} (довше за ".self::STUCK_REPORT_MINUTES.' хв). Схоже, воркер помер посеред роботи.'
+            : null;
+    }
+
+    private function failedAnalyses(CarbonImmutable $now): ?string
+    {
+        $failed = DailyAnalysis::where('status', DailyAnalysis::STATUS_FAILED)
+            ->whereDate('updated_at', $now->toDateString())
+            ->count();
+
+        return $failed > 0
+            ? "AI-розборів упало сьогодні: {$failed}. Найчастіша причина — вичерпані кредити або невалідний ключ."
+            : null;
+    }
+
+    private function failedJobs(): ?string
+    {
+        $count = DB::table('failed_jobs')->count();
+
+        return $count > 0
+            ? "У failed_jobs накопичилось записів: {$count} (php artisan queue:failed)."
+            : null;
+    }
+
+    /**
+     * Черга не рухається: джоба лежить довше, ніж триває найдовша робота.
+     * Ловить зупинений або впалий queue-воркер, навіть коли решта сервісу жива.
+     */
+    private function stalledQueue(CarbonImmutable $now): ?string
+    {
+        $oldest = DB::table('jobs')->min('available_at');
+
+        if (! $oldest) {
+            return null;
+        }
+
+        $waiting = (int) round(CarbonImmutable::createFromTimestamp($oldest)->diffInMinutes($now));
+
+        return $waiting >= self::QUEUE_STALL_MINUTES
+            ? "Черга не рухається: найстаріша джоба чекає {$waiting} хв. Перевірте systemctl status yaware-queue-*."
+            : null;
+    }
+
+    private function lowDisk(): ?string
+    {
+        try {
+            $free = disk_free_space(base_path());
+            $total = disk_total_space(base_path());
+        } catch (Throwable) {
+            return null;
+        }
+
+        if (! $free || ! $total) {
+            return null;
+        }
+
+        $percent = (int) round($free / $total * 100);
+
+        return $percent < self::MIN_FREE_DISK_PERCENT
+            ? "На диску лишилось {$percent}% вільного місця — звіти скоро перестануть зберігатись."
+            : null;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function state(): array
+    {
+        if (! is_file($this->statePath)) {
+            return [];
+        }
+
+        try {
+            $state = json_decode((string) file_get_contents($this->statePath), true, 512, JSON_THROW_ON_ERROR);
+        } catch (Throwable) {
+            return [];
+        }
+
+        return is_array($state) ? $state : [];
+    }
+
+    /**
+     * @param  array<string, mixed>  $state
+     */
+    private function writeState(array $state): void
+    {
+        File::ensureDirectoryExists(dirname($this->statePath));
+        File::put($this->statePath, json_encode($state, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+    }
+}

@@ -6,6 +6,7 @@ use App\Jobs\GenerateYawareReport;
 use App\Models\Employee;
 use App\Models\Report;
 use App\Services\GoogleSheetsService;
+use App\Services\OpsMonitor;
 use App\Services\TelegramService;
 use App\Services\TrelloService;
 use Carbon\CarbonImmutable;
@@ -63,6 +64,10 @@ class GenerateDailyReports extends Command
         }
 
         $this->info("У чергу поставлено звітів: {$queued}.");
+
+        // Позначка для ops:healthcheck: без неї він за годину вирішить, що
+        // ранкової автогенерації сьогодні не було.
+        app(OpsMonitor::class)->recordDailyRun();
 
         $this->notifyOps($date, $queued, $skipped);
 
