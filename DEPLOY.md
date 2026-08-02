@@ -59,7 +59,9 @@ Chromium з кешу Playwright.
   список змінних (сам `.env` у git не потрапляє); якщо додали нову змінну в
   `config/`, додайте її і в шаблон, інакше на наступному деплої її пропустять
 - `APP_ENV=production`, `APP_DEBUG=false`, `APP_URL=https://<домен>`
-- `DB_CONNECTION=sqlite` (файл лишається; бекапити `database/database.sqlite`)
+- `DB_CONNECTION=sqlite` (файл лишається). База працює в режимі **WAL** —
+  див. розділ «Бекап бази», просте копіювання `database.sqlite` більше не
+  є коректним бекапом
 - Перенести секрети: `TRELLO_API_KEY`, `TRELLO_TEMPLATE_BOARD_ID`,
   `GOOGLE_OAUTH_CLIENT_ID`/`GOOGLE_OAUTH_CLIENT_SECRET`,
   `TELEGRAM_BOT_TOKEN`/`TELEGRAM_BOT_USERNAME`/`TELEGRAM_WEBHOOK_SECRET`
@@ -98,6 +100,35 @@ Chromium). Після деплою нового коду — `systemctl restart`
 команді розтягувалась удвічі. Якщо AI-ключів у `.env` немає, воркер просто
 стоїть без роботи — заводити його все одно варто, інакше після появи ключа
 розбори мовчки накопичуватимуться в черзі.
+
+## 5а. SQLite у режимі WAL і бекап бази
+
+До бази одночасно пишуть три queue-воркери, PHP-FPM на кожен запит API,
+планувальник і сесії з кешем (`SESSION_DRIVER=database`, `CACHE_STORE=database`).
+У типовому режимі `delete` будь-який запис блокує **всю** базу, і сусідній
+процес падає з `database is locked`. Тому в `config/database.php`:
+
+- `journal_mode = WAL` — читання більше не блокується записом;
+- `busy_timeout = 10000` — процес чекає до 10 с замість миттєвого падіння.
+
+Обидва значення перевизначаються через `DB_JOURNAL_MODE` і `DB_BUSY_TIMEOUT`.
+`synchronous` свідомо лишено за замовчуванням (`FULL`): `NORMAL` швидший, але
+при раптовому вимкненні живлення втрачає останні транзакції.
+
+**Наслідок для експлуатації.** Поруч із `database.sqlite` з'являються
+`database.sqlite-wal` і `database.sqlite-shm`. Свіжі транзакції якийсь час
+лежать саме в `-wal`, тому:
+
+- ❌ `cp database.sqlite backup.sqlite` — більше **не** коректний бекап;
+- ✅ `sqlite3 database/database.sqlite ".backup /root/yaware-$(date +%F).sqlite"` —
+  узгоджена копія, яку можна робити на працюючому сервісі.
+
+Усі три файли мусять належати `www-data`. Тому artisan на проді запускається
+**лише** через `sudo -u www-data HOME=/tmp php artisan …`: запуск від root
+створить `-wal`/`-shm` з власником root, і воркери втратять доступ до бази.
+
+Перевірити режим:
+`sudo -u www-data HOME=/tmp php artisan tinker --execute='echo DB::select("PRAGMA journal_mode")[0]->journal_mode;'`
 
 ## 6. Зовнішні сервіси — перемкнути на прод-домен
 

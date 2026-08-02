@@ -37,6 +37,9 @@ screenshots/
 backend/storage/app/reports/
 backend/database/*.sqlite
 backend/database/*.sqlite-journal
+# Супутні файли режиму WAL
+backend/database/*.sqlite-wal
+backend/database/*.sqlite-shm
 
 # ---- Laravel runtime ----
 backend/storage/framework/cache/*

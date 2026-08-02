@@ -38,8 +38,17 @@ return [
             'database' => env('DB_DATABASE', database_path('database.sqlite')),
             'prefix' => '',
             'foreign_key_constraints' => env('DB_FOREIGN_KEYS', true),
-            'busy_timeout' => null,
-            'journal_mode' => null,
+            // Скільки чекати зайняту базу, перш ніж здатися. Без цього процес
+            // падає з «database is locked» миттєво, хоча блокування триває
+            // мілісекунди: саме так упала джоба звіту 2026-07-09.
+            'busy_timeout' => env('DB_BUSY_TIMEOUT', 10000),
+            // WAL: читання перестає блокуватися записом. До бази одночасно
+            // пишуть три queue-воркери, PHP-FPM на кожен запит API і
+            // планувальник, а в режимі delete будь-який запис блокує всю базу.
+            'journal_mode' => env('DB_JOURNAL_MODE', 'WAL'),
+            // synchronous свідомо лишається за замовчуванням (FULL): NORMAL
+            // помітно швидший, але при раптовому вимкненні живлення втрачає
+            // останні транзакції. На цьому обсязі виграш не вартий ризику.
             'synchronous' => null,
             'transaction_mode' => 'DEFERRED',
         ],
