@@ -49,9 +49,7 @@ class GoogleSheetsService
 
     private const MONTH_TOTALS_ROW = 41;
 
-    public function __construct(private readonly ?string $spreadsheetId = null)
-    {
-    }
+    public function __construct(private readonly ?string $spreadsheetId = null) {}
 
     /**
      * Інстанс у контексті користувача: звіти йдуть лише в його персональну

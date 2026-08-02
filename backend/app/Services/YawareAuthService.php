@@ -13,7 +13,7 @@ class YawareAuthService
      * Перевіряє креди через Playwright-логін у Yaware.
      *
      * @return array{employee: array{id: string, name: string}|null}|null
-     *         null — логін не вдався.
+     *                                                                    null — логін не вдався.
      */
     public function attemptLogin(string $email, string $password): ?array
     {

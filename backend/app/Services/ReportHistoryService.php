@@ -13,7 +13,7 @@ class ReportHistoryService
      * Складає структуровані дані воркера (history-data-*.json) в історичні
      * таблиці. Повторна генерація звіту за той самий день перезаписує дані.
      *
-     * @param array{stats?: array<string, mixed>, activities?: array<int, array<string, mixed>>, idle_activities?: ?array<int, array<int, string>>} $history
+     * @param  array{stats?: array<string, mixed>, activities?: array<int, array<string, mixed>>, idle_activities?: ?array<int, array<int, string>>}  $history
      */
     public function store(Report $report, array $history): DailyStat
     {

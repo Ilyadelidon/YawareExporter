@@ -27,9 +27,11 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class EmployeeMemory extends Model
 {
     public const KIND_ACTIVITY = 'activity';
+
     public const KIND_FACT = 'fact';
 
     public const SOURCE_AI = 'ai';
+
     public const SOURCE_ADMIN = 'admin';
 
     public const VERDICTS = ['work_related', 'personal', 'unknown'];

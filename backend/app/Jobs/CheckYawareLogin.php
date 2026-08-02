@@ -20,7 +20,7 @@ use Throwable;
  * фронтенд полить GET /api/auth/login/pending/{id} і забирає токен один раз.
  * Окрема черга logins — щоб логін не стояв за довгими джобами звітів.
  */
-class CheckYawareLogin implements ShouldQueue, ShouldBeEncrypted
+class CheckYawareLogin implements ShouldBeEncrypted, ShouldQueue
 {
     use Queueable;
 

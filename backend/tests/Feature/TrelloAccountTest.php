@@ -2,6 +2,8 @@
 
 namespace Tests\Feature;
 
+use App\Models\Employee;
+use App\Models\Report;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
@@ -210,7 +212,7 @@ class TrelloAccountTest extends TestCase
     public function test_completed_report_exposes_trello_tasks_snapshot(): void
     {
         $user = User::factory()->create();
-        $employee = \App\Models\Employee::create([
+        $employee = Employee::create([
             'user_id' => $user->id,
             'name' => 'Іван',
             'email' => $user->email,
@@ -221,10 +223,10 @@ class TrelloAccountTest extends TestCase
             ['id' => 'c1', 'name' => 'Таска зі знімка', 'comment' => '', 'labels' => []],
         ];
 
-        $report = \App\Models\Report::create([
+        $report = Report::create([
             'employee_id' => $employee->id,
             'report_date' => '2026-07-10',
-            'status' => \App\Models\Report::STATUS_COMPLETED,
+            'status' => Report::STATUS_COMPLETED,
             'trello_tasks' => $snapshot,
         ]);
 

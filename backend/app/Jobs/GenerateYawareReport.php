@@ -9,8 +9,8 @@ use App\Services\GoogleSheetsService;
 use App\Services\ReportHistoryService;
 use App\Services\TelegramService;
 use App\Services\TrelloService;
-use Carbon\CarbonImmutable;
 use App\Support\WorkerEnvironment;
+use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\File;
@@ -26,9 +26,7 @@ class GenerateYawareReport implements ShouldQueue
 
     public int $tries = 1;
 
-    public function __construct(public Report $report)
-    {
-    }
+    public function __construct(public Report $report) {}
 
     public function handle(): void
     {

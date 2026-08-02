@@ -28,7 +28,7 @@ class TrelloService
             return new self($user->trello_token, $user->trello_board_id);
         }
 
-        return new self();
+        return new self;
     }
 
     /**
