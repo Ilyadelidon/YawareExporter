@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Models\Report;
 use App\Models\ReportFile;
+use App\Services\AiAnalysisService;
 use App\Services\GoogleSheetsService;
 use App\Services\ReportHistoryService;
 use App\Services\TelegramService;
@@ -153,6 +154,12 @@ class GenerateYawareReport implements ShouldQueue
         ]);
 
         $this->notifySuccess($report, $trelloTasks, $googleSheetUrl);
+
+        // AI-розбір дня для адміністратора — окремою джобою, щоб довгий запит
+        // до Claude не тримав чергу звітів і не зривав готовий звіт при помилці.
+        if (app(AiAnalysisService::class)->isConfigured()) {
+            GenerateDailyAnalysis::dispatch($report);
+        }
     }
 
     /**

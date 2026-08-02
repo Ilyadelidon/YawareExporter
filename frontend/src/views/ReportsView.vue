@@ -5,6 +5,7 @@ import Message from 'primevue/message';
 import Select from 'primevue/select';
 import client from '../api/client';
 import ActivityBreakdown from '../components/ActivityBreakdown.vue';
+import AiAnalysisPanel from '../components/AiAnalysisPanel.vue';
 import IntegrationsStrip from '../components/IntegrationsStrip.vue';
 import { useAuthStore } from '../stores/auth';
 
@@ -346,7 +347,7 @@ onUnmounted(() => clearTimeout(pollTimer));
         />
         <div class="field-pill">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#149d8d" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
-          <DatePicker v-model="selectedDate" date-format="dd.mm.yy" :manual-input="false" />
+          <DatePicker v-model="selectedDate" date-format="dd.mm.yy" :manual-input="false" select-other-months />
         </div>
         <button
           v-if="!viewingOther"
@@ -550,6 +551,14 @@ onUnmounted(() => clearTimeout(pollTimer));
     <!-- Повні таблиці активності з історичної БД — на всю ширину під колонками -->
     <ActivityBreakdown
       v-if="isDone && !loading && report.employee_id"
+      :employee-id="report.employee_id"
+      :date="report.report_date"
+      :version="report.generated_at || ''"
+    />
+
+    <!-- AI-розбір дня — лише для адміністратора (бекенд теж під middleware admin) -->
+    <AiAnalysisPanel
+      v-if="auth.isAdmin && isDone && !loading && report.employee_id"
       :employee-id="report.employee_id"
       :date="report.report_date"
       :version="report.generated_at || ''"

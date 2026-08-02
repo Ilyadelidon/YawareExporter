@@ -1,0 +1,100 @@
+<?php
+
+namespace App\Jobs;
+
+use App\Models\DailyAnalysis;
+use App\Models\Report;
+use App\Services\Ai\EmployeeMemoryService;
+use App\Services\AiAnalysisService;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Support\Facades\Log;
+use Throwable;
+
+/**
+ * AI-розбір робочого дня. Ставиться в чергу після успішного звіту, тому до
+ * моменту запуску activity_entries і daily_stats за цей день уже заповнені.
+ */
+class GenerateDailyAnalysis implements ShouldQueue
+{
+    use Queueable;
+
+    // Запит із web_search на високому effort може думати кілька хвилин.
+    public int $timeout = 600;
+
+    public int $tries = 1;
+
+    /**
+     * @param  ?string  $provider  null — провайдер за замовчуванням із .env.
+     */
+    public function __construct(public Report $report, public ?string $provider = null)
+    {
+    }
+
+    public function handle(AiAnalysisService $service, EmployeeMemoryService $memory): void
+    {
+        $report = $this->report->fresh('employee');
+
+        if (! $report || ! $report->employee || ! $service->isConfigured($this->provider)) {
+            return;
+        }
+
+        $analysis = DailyAnalysis::updateOrCreate(
+            ['employee_id' => $report->employee_id, 'date' => $report->report_date->toDateString()],
+            ['status' => DailyAnalysis::STATUS_PROCESSING, 'error_message' => null],
+        );
+
+        try {
+            $outcome = $service->analyse($report, $this->provider);
+        } catch (Throwable $exception) {
+            Log::warning("AI-аналіз звіту #{$report->id} не виконано: {$exception->getMessage()}");
+
+            $analysis->update([
+                'status' => DailyAnalysis::STATUS_FAILED,
+                'error_message' => mb_substr($exception->getMessage(), 0, 2000),
+            ]);
+
+            return;
+        }
+
+        $analysis->update([
+            'status' => DailyAnalysis::STATUS_COMPLETED,
+            'provider' => $outcome['provider'],
+            'result' => $outcome['result'],
+            'model' => $outcome['model'],
+            'input_tokens' => $outcome['input_tokens'],
+            'output_tokens' => $outcome['output_tokens'],
+            'error_message' => null,
+            'generated_at' => now(),
+        ]);
+
+        // Пам'ять поповнюємо після збереження: якщо впаде вона, готовий розбір
+        // уже на місці й дивитись його можна.
+        try {
+            $memory->remember(
+                $report->employee_id,
+                $outcome['result'],
+                $report->report_date->toDateString(),
+            );
+        } catch (Throwable $exception) {
+            Log::warning("Пам'ять AI для звіту #{$report->id} не оновлено: {$exception->getMessage()}");
+        }
+    }
+
+    public function failed(Throwable $exception): void
+    {
+        $report = $this->report->fresh();
+
+        if (! $report) {
+            return;
+        }
+
+        DailyAnalysis::updateOrCreate(
+            ['employee_id' => $report->employee_id, 'date' => $report->report_date->toDateString()],
+            [
+                'status' => DailyAnalysis::STATUS_FAILED,
+                'error_message' => mb_substr($exception->getMessage(), 0, 2000),
+            ],
+        );
+    }
+}

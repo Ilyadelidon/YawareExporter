@@ -22,6 +22,7 @@ class EmployeeController extends Controller
 
         $validated = $request->validate([
             'name' => ['required', 'string', 'max:255'],
+            'position' => ['nullable', 'string', 'max:255'],
             'email' => ['required', 'email', 'unique:employees,email'],
             'yaware_id' => ['nullable', 'string', 'max:255'],
         ]);
@@ -39,6 +40,7 @@ class EmployeeController extends Controller
 
         $validated = $request->validate([
             'name' => ['sometimes', 'string', 'max:255'],
+            'position' => ['nullable', 'string', 'max:255'],
             'email' => ['sometimes', 'email', 'unique:employees,email,'.$employee->id],
             'yaware_id' => ['nullable', 'string', 'max:255'],
             'active' => ['sometimes', 'boolean'],

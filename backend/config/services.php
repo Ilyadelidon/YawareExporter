@@ -35,6 +35,34 @@ return [
         ],
     ],
 
+    'ai' => [
+        // Провайдер AI-аналітики за замовчуванням: anthropic | deepseek.
+        // Саме він працює у фоновому розборі після звіту; в інтерфейсі й у
+        // php artisan ai:compare можна вибрати інший разово.
+        'provider' => env('AI_PROVIDER', 'anthropic'),
+    ],
+
+    'anthropic' => [
+        // Ключ Claude API (https://console.anthropic.com). Без нього розділ
+        // AI-аналітики просто неактивний — решта сервісу працює як раніше.
+        'key' => env('ANTHROPIC_API_KEY'),
+        'model' => env('ANTHROPIC_MODEL', 'claude-sonnet-5'),
+        // Глибина міркування: low | medium | high | xhigh | max.
+        // medium — заміряний баланс: на реальному дні дав ті самі висновки за
+        // ~44 с і 2.9k вихідних токенів проти ~159 с і 8k на high.
+        'effort' => env('ANTHROPIC_EFFORT', 'medium'),
+    ],
+
+    'deepseek' => [
+        // Ключ DeepSeek (https://platform.deepseek.com). API сумісне з OpenAI,
+        // тож base_url можна підмінити на будь-який сумісний шлюз.
+        'key' => env('DEEPSEEK_API_KEY'),
+        // deepseek-chat — швидкий і дешевий; deepseek-reasoner міркує глибше,
+        // але й довше. Веб-пошуку немає в жодного з них.
+        'model' => env('DEEPSEEK_MODEL', 'deepseek-chat'),
+        'base_url' => env('DEEPSEEK_BASE_URL', 'https://api.deepseek.com'),
+    ],
+
     'google' => [
         // OAuth-клієнт Google Cloud (тип «Web application», redirect http://localhost:8000/google/callback).
         'client_id' => env('GOOGLE_OAUTH_CLIENT_ID'),

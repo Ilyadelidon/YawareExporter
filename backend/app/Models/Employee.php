@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-#[Fillable(['user_id', 'name', 'email', 'yaware_id', 'yaware_password', 'active'])]
+#[Fillable(['user_id', 'name', 'position', 'email', 'yaware_id', 'yaware_password', 'active'])]
 #[Hidden(['yaware_password'])]
 class Employee extends Model
 {

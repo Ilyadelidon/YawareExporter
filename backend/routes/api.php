@@ -1,7 +1,9 @@
 <?php
 
+use App\Http\Controllers\Api\AiAnalysisController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\EmployeeController;
+use App\Http\Controllers\Api\EmployeeMemoryController;
 use App\Http\Controllers\Api\GoogleSpreadsheetController;
 use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\StatsController;
@@ -53,9 +55,19 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/stats/activities', [StatsController::class, 'activities']);
 
     Route::middleware('admin')->group(function () {
+        // AI-розбір дня бачить лише адміністратор.
+        Route::get('/analysis', [AiAnalysisController::class, 'show']);
+        Route::post('/analysis', [AiAnalysisController::class, 'store']);
+
         Route::get('/timesheet', [TimesheetController::class, 'index']);
         Route::get('/employees', [EmployeeController::class, 'index']);
         Route::post('/employees', [EmployeeController::class, 'store']);
         Route::patch('/employees/{employee}', [EmployeeController::class, 'update']);
+
+        // Пам'ять AI по працівнику: вердикти, які модель більше не перешукує.
+        Route::get('/employees/{employee}/memory', [EmployeeMemoryController::class, 'index']);
+        Route::post('/employees/{employee}/memory', [EmployeeMemoryController::class, 'store']);
+        Route::patch('/employees/{employee}/memory/{memory}', [EmployeeMemoryController::class, 'update']);
+        Route::delete('/employees/{employee}/memory/{memory}', [EmployeeMemoryController::class, 'destroy']);
     });
 });

@@ -2,14 +2,40 @@
 import { onMounted, ref } from 'vue';
 import DataTable from 'primevue/datatable';
 import Column from 'primevue/column';
+import Message from 'primevue/message';
 import client from '../api/client';
+import EmployeeMemoryPanel from '../components/EmployeeMemoryPanel.vue';
 
 const employees = ref([]);
+// Пам'ять AI вантажиться лише для розгорнутого рядка — окремий запит на працівника.
+const expandedRows = ref({});
 const loading = ref(true);
+const savingId = ref(null);
+const errorMessage = ref('');
 
 async function loadEmployees() {
   const { data } = await client.get('/employees');
   employees.value = data.data;
+}
+
+// Посада редагується прямо в таблиці: її знає лише адміністратор, а окрема
+// форма заради одного поля не потрібна. Зберігаємо на blur/Enter.
+async function savePosition(employee, value) {
+  const position = value.trim() || null;
+  if (position === (employee.position || null)) {
+    return;
+  }
+
+  savingId.value = employee.id;
+  errorMessage.value = '';
+  try {
+    const { data } = await client.patch(`/employees/${employee.id}`, { position });
+    employee.position = data.data.position;
+  } catch (error) {
+    errorMessage.value = error.response?.data?.message || 'Не вдалося зберегти посаду.';
+  } finally {
+    savingId.value = null;
+  }
 }
 
 onMounted(async () => {
@@ -35,12 +61,31 @@ onMounted(async () => {
       </div>
     </div>
 
+    <Message v-if="errorMessage" severity="error" :closable="false" class="page-message">{{ errorMessage }}</Message>
+
     <div class="panel table-panel">
-      <DataTable :value="employees" :loading="loading" data-key="id">
+      <DataTable v-model:expanded-rows="expandedRows" :value="employees" :loading="loading" data-key="id">
         <template #empty>
           <div class="table-empty">Працівників поки немає.</div>
         </template>
+        <template #expansion="{ data }">
+          <EmployeeMemoryPanel :employee-id="data.id" />
+        </template>
+        <Column expander style="width: 40px" />
         <Column field="name" header="Імʼя" sortable />
+        <Column field="position" header="Посада" sortable>
+          <template #body="{ data }">
+            <input
+              class="cell-input"
+              type="text"
+              placeholder="Не вказано"
+              :value="data.position || ''"
+              :disabled="savingId === data.id"
+              @change="savePosition(data, $event.target.value)"
+              @keyup.enter="$event.target.blur()"
+            >
+          </template>
+        </Column>
         <Column field="email" header="Пошта" sortable />
         <Column field="yaware_id" header="Yaware ID" />
       </DataTable>
@@ -69,5 +114,33 @@ onMounted(async () => {
   padding: 10px 4px;
   font-size: 13.5px;
   color: var(--muted);
+}
+
+.page-message {
+  margin-top: 16px;
+}
+
+.cell-input {
+  width: 100%;
+  min-width: 140px;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+}
+
+.cell-input:hover:not(:disabled) {
+  border-color: var(--line);
+}
+
+.cell-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--surface);
+}
+
+.cell-input:disabled {
+  opacity: 0.6;
 }
 </style>
