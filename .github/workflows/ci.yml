@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Новий пуш у ту саму гілку скасовує попередній прогін — черга не росте.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (PHP 8.3)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: PHP 8.3
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          # Ті самі розширення, що стоять на проді (див. DEPLOY.md, п.1).
+          extensions: sqlite3, mbstring, xml, curl, zip, intl, gd
+          coverage: none
+
+      - name: Кеш залежностей Composer
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/composer/files
+          key: composer-${{ hashFiles('backend/composer.lock') }}
+          restore-keys: composer-
+
+      - name: Залежності
+        working-directory: backend
+        run: composer install --no-interaction --no-progress --prefer-dist
+
+      # Тести ганяють sqlite в пам'яті (phpunit.xml), але APP_KEY потрібен:
+      # каст 'encrypted' на yaware_password і trello_token без нього падає.
+      - name: Оточення
+        working-directory: backend
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+
+      - name: Стиль коду (Pint)
+        working-directory: backend
+        run: ./vendor/bin/pint --test
+
+      - name: Тести
+        working-directory: backend
+        run: php artisan test
+
+  frontend:
+    name: Frontend (Node 22)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Залежності
+        working-directory: frontend
+        run: npm ci
+
+      # Складання SPA — головна перевірка фронтенду: ловить биті .vue,
+      # неіснуючі імпорти й помилки в шаблонах. Тестів тут поки немає.
+      - name: Збірка
+        working-directory: frontend
+        run: npm run build
+
+  worker:
+    name: Worker (Playwright-скрипт)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Воркер запускається окремим процесом з черги, тож синтаксична помилка
+      # в ньому спливає лише під час генерації звіту — перевіряємо заздалегідь.
+      - name: Синтаксис воркера
+        run: node --check app/scripts/export-yaware-xls.mjs
