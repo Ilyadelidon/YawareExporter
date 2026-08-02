@@ -21,9 +21,10 @@ class StatsController extends Controller
         $dateFrom = $validated['date_from'] ?? now()->startOfMonth()->toDateString();
         $dateTo = $validated['date_to'] ?? now()->toDateString();
 
+        // Порівняння по самій колонці, а не whereDate: обгортка в DATE()/strftime()
+        // вимикає індекси (employee_id, date) і змушує читати таблицю цілком.
         $query = DailyStat::with('employee')
-            ->whereDate('date', '>=', $dateFrom)
-            ->whereDate('date', '<=', $dateTo)
+            ->whereBetween('date', [$dateFrom, $dateTo])
             ->orderBy('date')
             ->orderBy('employee_id');
 
@@ -61,7 +62,7 @@ class StatsController extends Controller
         }
 
         $entries = ActivityEntry::where('employee_id', $validated['employee_id'])
-            ->whereDate('date', $validated['date'])
+            ->where('date', $validated['date'])
             ->orderByDesc('duration_seconds')
             ->get();
 

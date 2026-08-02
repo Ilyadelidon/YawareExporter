@@ -37,7 +37,7 @@ class ReportHistoryService
             );
 
             ActivityEntry::where('employee_id', $report->employee_id)
-                ->whereDate('date', $date)
+                ->where('date', $date)
                 ->delete();
 
             $now = now();
@@ -73,11 +73,11 @@ class ReportHistoryService
 
         DB::transaction(function () use ($report, $date) {
             DailyStat::where('employee_id', $report->employee_id)
-                ->whereDate('date', $date)
+                ->where('date', $date)
                 ->delete();
 
             ActivityEntry::where('employee_id', $report->employee_id)
-                ->whereDate('date', $date)
+                ->where('date', $date)
                 ->delete();
         });
     }

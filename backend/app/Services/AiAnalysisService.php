@@ -102,11 +102,11 @@ class AiAnalysisService
         $employee = $report->employee;
 
         $stat = DailyStat::where('employee_id', $report->employee_id)
-            ->whereDate('date', $date)
+            ->where('date', $date)
             ->first();
 
         $activities = ActivityEntry::where('employee_id', $report->employee_id)
-            ->whereDate('date', $date)
+            ->where('date', $date)
             ->where('duration_seconds', '>', 0)
             ->orderByDesc('duration_seconds')
             ->limit(self::MAX_ACTIVITIES)

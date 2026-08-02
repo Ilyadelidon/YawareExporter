@@ -23,12 +23,16 @@ class ReportController extends Controller
             $query->where('employee_id', $request->integer('employee_id'));
         }
 
+        // Порівняння по самій колонці, а не whereDate: обгортка в DATE()/strftime()
+        // вимикає індекс (employee_id, report_date). Carbon зводимо до Y-m-d —
+        // інакше в SQLite '2026-07-01' порівнюється з '2026-07-01 00:00:00'
+        // лексикографічно і межа діапазону губиться.
         if ($request->filled('date_from')) {
-            $query->whereDate('report_date', '>=', $request->date('date_from'));
+            $query->where('report_date', '>=', $request->date('date_from')?->toDateString());
         }
 
         if ($request->filled('date_to')) {
-            $query->whereDate('report_date', '<=', $request->date('date_to'));
+            $query->where('report_date', '<=', $request->date('date_to')?->toDateString());
         }
 
         return response()->json($query->paginate(20));

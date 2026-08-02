@@ -26,8 +26,10 @@ class TimesheetController extends Controller
         $start = $month->toDateString();
         $end = $month->endOfMonth()->toDateString();
 
-        $stats = DailyStat::whereDate('date', '>=', $start)
-            ->whereDate('date', '<=', $end)
+        // Порівняння по самій колонці, а не whereDate: обгортка в DATE()/strftime()
+        // вимикає унікальний індекс (employee_id, date) — а тут вибирається місяць
+        // по всій команді.
+        $stats = DailyStat::whereBetween('date', [$start, $end])
             ->get()
             ->groupBy('employee_id');
 

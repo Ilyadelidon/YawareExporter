@@ -26,7 +26,7 @@ class AiAnalysisController extends Controller
         ]);
 
         $analysis = DailyAnalysis::where('employee_id', $validated['employee_id'])
-            ->whereDate('date', $validated['date'])
+            ->where('date', $validated['date'])
             ->first();
 
         $service = app(AiAnalysisService::class);
@@ -67,7 +67,7 @@ class AiAnalysisController extends Controller
         }
 
         $report = Report::where('employee_id', $validated['employee_id'])
-            ->whereDate('report_date', $validated['date'])
+            ->where('report_date', $validated['date'])
             ->where('status', Report::STATUS_COMPLETED)
             ->first();
 

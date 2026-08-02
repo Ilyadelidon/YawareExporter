@@ -26,7 +26,7 @@ class CompareAiProviders extends Command
     {
         $report = Report::with('employee')
             ->where('employee_id', $this->argument('employee'))
-            ->whereDate('report_date', $this->argument('date'))
+            ->where('report_date', $this->argument('date'))
             ->where('status', Report::STATUS_COMPLETED)
             ->first();
 
