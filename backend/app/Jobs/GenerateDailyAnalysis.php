@@ -14,10 +14,16 @@ use Throwable;
 /**
  * AI-розбір робочого дня. Ставиться в чергу після успішного звіту, тому до
  * моменту запуску activity_entries і daily_stats за цей день уже заповнені.
+ *
+ * Окрема черга analysis — щоб десятихвилинний запит до моделі не стояв між
+ * звітами: у спільній черзі ранковий прогін по команді розтягувався вдвічі
+ * (звіт до 11 хв + розбір до 10 хв послідовно на кожного працівника).
  */
 class GenerateDailyAnalysis implements ShouldQueue
 {
     use Queueable;
+
+    public const QUEUE = 'analysis';
 
     // Запит із web_search на високому effort може думати кілька хвилин.
     public int $timeout = 600;
@@ -29,6 +35,7 @@ class GenerateDailyAnalysis implements ShouldQueue
      */
     public function __construct(public Report $report, public ?string $provider = null)
     {
+        $this->onQueue(self::QUEUE);
     }
 
     public function handle(AiAnalysisService $service, EmployeeMemoryService $memory): void

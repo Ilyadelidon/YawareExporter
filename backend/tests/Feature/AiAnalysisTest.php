@@ -100,7 +100,12 @@ class AiAnalysisTest extends TestCase
             ->assertStatus(202)
             ->assertJsonPath('data.status', DailyAnalysis::STATUS_PENDING);
 
-        Queue::assertPushed(GenerateDailyAnalysis::class);
+        // Саме черга analysis, а не спільна з звітами: інакше розбір стає в хвіст
+        // за генераціями і ранковий прогін по команді йде вдвічі довше.
+        Queue::assertPushed(
+            GenerateDailyAnalysis::class,
+            fn (GenerateDailyAnalysis $job) => $job->queue === GenerateDailyAnalysis::QUEUE,
+        );
     }
 
     public function test_analysis_requires_completed_report(): void

@@ -1,6 +1,7 @@
 ﻿# Запускає всі процеси сервісу звітності в окремих вікнах:
 #   1. Laravel API        (http://localhost:8000)
-#   2. Обробники черг     (logins — перевірки логіну, default — генерація звітів)
+#   2. Обробники черг     (logins — перевірки логіну, default — генерація звітів,
+#                          analysis — AI-розбір дня)
 #   3. Vue-фронтенд       (відкриє браузер сам)
 # Зупинити все — просто закрити відповідні вікна.
 
@@ -17,11 +18,13 @@ if (Test-PortBusy 8000) {
     Write-Host "API запущено на http://localhost:8000" -ForegroundColor Green
 }
 
-# Два воркери: logins — швидкі Playwright-перевірки логіну (щоб вхід не чекав
-# за довгими звітами), default — генерація звітів.
+# Три воркери: logins — швидкі Playwright-перевірки логіну (щоб вхід не чекав
+# за довгими звітами), default — генерація звітів, analysis — AI-розбір дня
+# (працює паралельно зі звітами, інакше ранковий прогін іде вдвічі довше).
 $workers = @(
-    @{ Name = 'logins';  Title = 'Yaware Queue (logins)';  Timeout = 180; Sleep = 1 },
-    @{ Name = 'default'; Title = 'Yaware Queue (reports)'; Timeout = 700; Sleep = 3 }
+    @{ Name = 'logins';   Title = 'Yaware Queue (logins)';   Timeout = 180; Sleep = 1 },
+    @{ Name = 'default';  Title = 'Yaware Queue (reports)';  Timeout = 700; Sleep = 3 },
+    @{ Name = 'analysis'; Title = 'Yaware Queue (AI)';       Timeout = 640; Sleep = 5 }
 )
 
 foreach ($worker in $workers) {

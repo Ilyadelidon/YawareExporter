@@ -82,15 +82,22 @@ Chromium з кешу Playwright.
 
 ## 5. Демони (systemd)
 
-Два queue-воркери — ті самі параметри, що в `start-dev.ps1`:
+Три queue-воркери — ті самі параметри, що в `start-dev.ps1`:
 
 | unit | команда |
 |---|---|
 | yaware-queue-logins | `php artisan queue:work --queue=logins --timeout=180 --tries=1 --sleep=1` |
 | yaware-queue-default | `php artisan queue:work --queue=default --timeout=700 --tries=1 --sleep=3` |
+| yaware-queue-analysis | `php artisan queue:work --queue=analysis --timeout=640 --tries=1 --sleep=5` |
 
 `Restart=always`, `User=www-data` (той самий користувач, під яким ставили
-Chromium). Після деплою нового коду — `systemctl restart` обох.
+Chromium). Після деплою нового коду — `systemctl restart` усіх трьох.
+
+Черга `analysis` (AI-розбір дня) винесена окремо навмисно: запит до моделі
+триває до 10 хв, і в спільній із звітами черзі ранкова автогенерація по всій
+команді розтягувалась удвічі. Якщо AI-ключів у `.env` немає, воркер просто
+стоїть без роботи — заводити його все одно варто, інакше після появи ключа
+розбори мовчки накопичуватимуться в черзі.
 
 ## 6. Зовнішні сервіси — перемкнути на прод-домен
 

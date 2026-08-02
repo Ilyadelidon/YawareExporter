@@ -155,8 +155,9 @@ class GenerateYawareReport implements ShouldQueue
 
         $this->notifySuccess($report, $trelloTasks, $googleSheetUrl);
 
-        // AI-розбір дня для адміністратора — окремою джобою, щоб довгий запит
-        // до Claude не тримав чергу звітів і не зривав готовий звіт при помилці.
+        // AI-розбір дня для адміністратора — окремою джобою в черзі analysis,
+        // щоб довгий запит до моделі не тримав чергу звітів і не зривав
+        // готовий звіт при помилці.
         if (app(AiAnalysisService::class)->isConfigured()) {
             GenerateDailyAnalysis::dispatch($report);
         }
