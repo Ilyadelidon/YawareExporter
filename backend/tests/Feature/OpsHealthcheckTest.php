@@ -52,6 +52,18 @@ class OpsHealthcheckTest extends TestCase
         return Employee::create(['name' => 'Іван', 'email' => 'ivan@example.com']);
     }
 
+    private function failedJob(string $uuid, \DateTimeInterface $failedAt): void
+    {
+        DB::table('failed_jobs')->insert([
+            'uuid' => $uuid,
+            'connection' => 'database',
+            'queue' => 'default',
+            'payload' => json_encode(['displayName' => 'App\Jobs\GenerateReportJob']),
+            'exception' => 'boom',
+            'failed_at' => $failedAt,
+        ]);
+    }
+
     private function alerts(): array
     {
         $texts = [];
@@ -181,20 +193,31 @@ class OpsHealthcheckTest extends TestCase
             'date' => '2026-07-19',
             'status' => DailyAnalysis::STATUS_FAILED,
         ]);
-        DB::table('failed_jobs')->insert([
-            'uuid' => 'abc-123',
-            'connection' => 'database',
-            'queue' => 'default',
-            'payload' => '{}',
-            'exception' => 'boom',
-            'failed_at' => now(),
-        ]);
+        $this->failedJob('abc-123', now());
 
         $this->artisan('ops:healthcheck')->assertSuccessful();
 
         $alert = $this->alerts()[0];
         $this->assertStringContainsString('AI-розборів упало сьогодні: 1', $alert);
-        $this->assertStringContainsString('failed_jobs', $alert);
+        $this->assertStringContainsString('Джоб упало за добу: 1', $alert);
+        // Ім'я джоби видно одразу — не треба заходити на сервер, щоб зрозуміти,
+        // що саме падає.
+        $this->assertStringContainsString('GenerateReportJob', $alert);
+    }
+
+    public function test_old_failed_job_does_not_alert_forever(): void
+    {
+        Http::fake();
+        $this->travelTo(CarbonImmutable::parse('2026-07-20 09:00', 'Europe/Kyiv'));
+        app(OpsMonitor::class)->recordDailyRun();
+
+        // Таблиця failed_jobs не самоочищується: позавчорашнє падіння, яке вже
+        // відзвітували, не має тримати сповіщення вічно.
+        $this->failedJob('old-1', now()->subDays(2));
+
+        $this->artisan('ops:healthcheck')->assertSuccessful();
+
+        Http::assertNothingSent();
     }
 
     public function test_same_problem_is_not_repeated_every_run(): void

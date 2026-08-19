@@ -35,6 +35,9 @@ class OpsMonitor
     /** Менше вільного місця — і звіти перестануть зберігатись. */
     private const MIN_FREE_DISK_PERCENT = 10;
 
+    /** Падіння, старіше за це, — рядок у журналі, а не свіжа аварія. */
+    private const FAILED_JOB_WINDOW_HOURS = 24;
+
     /** Та сама проблема не повторюється частіше, ніж раз на стільки годин. */
     private const REPEAT_ALERT_HOURS = 6;
 
@@ -70,7 +73,7 @@ class OpsMonitor
             $this->failedReports($now),
             $this->stuckReports($now),
             $this->failedAnalyses($now),
-            $this->failedJobs(),
+            $this->failedJobs($now),
             $this->stalledQueue($now),
             $this->lowDisk(),
         ]));
@@ -179,13 +182,38 @@ class OpsMonitor
             : null;
     }
 
-    private function failedJobs(): ?string
+    /**
+     * Свіжі падіння джоб. Таблиця failed_jobs не самоочищується, тож без
+     * вікна пара давніх записів тримала б сповіщення вічно — монітор
+     * перетворився б на фоновий шум, який перестають читати.
+     */
+    private function failedJobs(CarbonImmutable $now): ?string
     {
-        $count = DB::table('failed_jobs')->count();
+        // failed_at пишеться в таймзоні застосунку (UTC), тож межу вікна
+        // приводимо туди ж, інакше отримали б зсув на київські +3.
+        $recent = DB::table('failed_jobs')
+            ->where('failed_at', '>=', $now->subHours(self::FAILED_JOB_WINDOW_HOURS)->utc()->toDateTimeString())
+            ->pluck('payload');
 
-        return $count > 0
-            ? "У failed_jobs накопичилось записів: {$count} (php artisan queue:failed)."
-            : null;
+        if ($recent->isEmpty()) {
+            return null;
+        }
+
+        $names = $recent->map(fn (?string $payload) => $this->jobName($payload))->unique()->implode(', ');
+
+        return "Джоб упало за добу: {$recent->count()} ({$names}). Деталі — php artisan queue:failed.";
+    }
+
+    /**
+     * Ім'я джоби з payload — щоб зрозуміти, що саме падає, не заходячи на сервер.
+     */
+    private function jobName(?string $payload): string
+    {
+        $decoded = json_decode((string) $payload, true);
+
+        return is_array($decoded) && is_string($decoded['displayName'] ?? null)
+            ? class_basename($decoded['displayName'])
+            : 'невідома джоба';
     }
 
     /**
