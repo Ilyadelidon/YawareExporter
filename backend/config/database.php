@@ -50,7 +50,19 @@ return [
             // помітно швидший, але при раптовому вимкненні живлення втрачає
             // останні транзакції. На цьому обсязі виграш не вартий ризику.
             'synchronous' => null,
-            'transaction_mode' => 'DEFERRED',
+            // IMMEDIATE, а не DEFERRED: у DEFERRED транзакція стартує як
+            // читання, і коли їй потрібно перейти до запису (queue::pop робить
+            // SELECT з jobs, потім UPDATE), SQLite віддає SQLITE_BUSY_SNAPSHOT
+            // миттєво — busy_timeout у цьому шляху не діє взагалі. Саме так
+            // упала джоба аналізу 2026-08-08. IMMEDIATE бере лок на запис
+            // одразу на BEGIN, де busy_timeout уже чекає своєї черги.
+            //
+            // Увага: фреймворк застосовує це лише на PHP >= 8.4 (див.
+            // SQLiteConnection::executeBeginTransactionStatement), а прод поки
+            // на 8.3 — там налаштування мовчки не діє. Тому чергу окремо
+            // страхує App\Queue\RetryingDatabaseQueue; прибрати її можна буде
+            // після оновлення PHP.
+            'transaction_mode' => env('DB_TRANSACTION_MODE', 'IMMEDIATE'),
         ],
 
         'mysql' => [
