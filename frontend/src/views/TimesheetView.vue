@@ -188,23 +188,35 @@ th.col-name {
   min-width: 42px;
 }
 
+/* Підсумкові колонки — окремий блок: тонована смуга з жирною лінією
+   зліва, щоб очі одразу відділяли їх від сітки днів. */
+.col-total,
+.col-count {
+  background: #eef7f6;
+}
+
+.sheet thead .col-total,
+.sheet thead .col-count {
+  color: var(--accent);
+  background: #e3f1ef;
+}
+
 .col-total {
   font-weight: 700;
   color: var(--accent);
   padding-left: 10px !important;
   padding-right: 12px !important;
-  border-left: 1px solid var(--line);
+  border-left: 2px solid var(--accent);
   position: sticky;
   right: 52px;
-  background: var(--surface);
 }
 
 .col-count {
   padding-right: 14px !important;
-  color: var(--muted);
+  font-weight: 600;
+  color: var(--text-dim);
   position: sticky;
   right: 0;
-  background: var(--surface);
   min-width: 52px;
 }
 
