@@ -91,6 +91,12 @@ return [
         'heartbeat_url' => env('OPS_HEARTBEAT_URL'),
     ],
 
+    'bitrix' => [
+        // Часовий пояс, у якому дата звіту трактується як «день» для планових
+        // дат тасок Бітрікса. За замовчуванням той самий, що й для Trello.
+        'timezone' => env('BITRIX_TIMEZONE', env('TRELLO_TIMEZONE', 'Europe/Kyiv')),
+    ],
+
     'trello' => [
         'key' => env('TRELLO_API_KEY'),
         // Дошка-шаблон: нові дошки користувачів клонують її списки й мітки (без карток).

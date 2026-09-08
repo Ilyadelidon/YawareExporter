@@ -31,7 +31,7 @@ class BackfillReportTrelloTasks extends Command
         }
 
         $reports = Report::where('status', Report::STATUS_COMPLETED)
-            ->whereNull('trello_tasks')
+            ->whereNull('tasks')
             ->orderBy('report_date')
             ->get();
 
@@ -52,7 +52,7 @@ class BackfillReportTrelloTasks extends Command
                 continue;
             }
 
-            $report->update(['trello_tasks' => $tasks]);
+            $report->update(['tasks' => $tasks]);
             $this->line("Звіт #{$report->id} ({$date}): збережено ".count($tasks).' тасок.');
         }
 

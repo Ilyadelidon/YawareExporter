@@ -284,4 +284,47 @@ class OpsHealthcheckTest extends TestCase
 
         Http::assertSent(fn (Request $request) => $request->url() === 'https://hc-ping.test/uuid/fail');
     }
+
+    public function test_day_missing_from_google_sheet_raises_alarm(): void
+    {
+        Http::fake();
+        $this->travelTo(CarbonImmutable::parse('2026-07-20 09:00', 'Europe/Kyiv'));
+        app(OpsMonitor::class)->recordDailyRun();
+
+        // Звіт «успішний», але день не потрапив у таблицю — без окремої
+        // перевірки про це не дізнався б ніхто.
+        $report = Report::create([
+            'employee_id' => $this->employee()->id,
+            'report_date' => '2026-07-19',
+            'status' => Report::STATUS_COMPLETED,
+            'summary' => ['Попередження' => 'звіт не вивантажено в Google Таблицю: HTTP 500 Internal Error'],
+        ]);
+
+        $this->artisan('ops:healthcheck')->assertSuccessful();
+
+        $alert = $this->alerts()[0];
+        $this->assertStringContainsString('Днів не потрапило в Google Таблицю: 1 (19.07.2026)', $alert);
+        $this->assertStringContainsString("reports:sync-google {$report->id}", $alert);
+    }
+
+    public function test_completed_report_in_the_sheet_stays_quiet(): void
+    {
+        Http::fake();
+        $this->travelTo(CarbonImmutable::parse('2026-07-20 09:00', 'Europe/Kyiv'));
+        app(OpsMonitor::class)->recordDailyRun();
+
+        Report::create([
+            'employee_id' => $this->employee()->id,
+            'report_date' => '2026-07-19',
+            'status' => Report::STATUS_COMPLETED,
+            'summary' => [
+                'Google Таблиця' => 'https://docs.google.com/spreadsheets/d/x/edit#gid=1',
+                'Попередження' => 'офлайн активності за обрану дату відсутні.',
+            ],
+        ]);
+
+        $this->artisan('ops:healthcheck')->assertSuccessful();
+
+        Http::assertNothingSent();
+    }
 }

@@ -33,6 +33,19 @@ const verdictMeta = {
   unknown: { label: 'Невідомо', class: 'is-unknown' },
 };
 
+const severityMeta = {
+  critical: { label: 'Критичне', class: 'is-critical' },
+  minor: { label: 'Дрібне', class: 'is-minor' },
+};
+
+const violationTypes = {
+  personal_time: 'Особистий час',
+  no_task_evidence: 'Таски не підтверджені',
+  schedule: 'Графік',
+  side_work: 'Робота на сторону',
+  other: 'Інше',
+};
+
 const coverageMeta = {
   confirmed: { label: 'Підтверджено', class: 'is-work' },
   partial: { label: 'Частково', class: 'is-unknown' },
@@ -47,6 +60,14 @@ const result = computed(() => (isDone.value ? analysis.value.result || {} : {}))
 const unclear = computed(() => result.value.unclear_activities || []);
 const coverage = computed(() => result.value.task_coverage || []);
 const recommendations = computed(() => result.value.recommendations || []);
+// Критичні йдуть першими: саме через них керівнику приходить лист.
+const violations = computed(() => [...(result.value.violations || [])]
+  .sort((a, b) => (a.severity === 'critical' ? 0 : 1) - (b.severity === 'critical' ? 0 : 1)));
+const hasCritical = computed(() => violations.value.some((item) => item.severity === 'critical'));
+// Час листа приходить в UTC — показуємо його в часовому поясі керівника.
+const alertedAt = computed(() => (analysis.value?.alerted_at
+  ? new Date(analysis.value.alerted_at).toLocaleString('uk-UA', { dateStyle: 'short', timeStyle: 'short' })
+  : ''));
 
 function stopPolling() {
   if (pollTimer) {
@@ -167,6 +188,40 @@ onUnmounted(stopPolling);
         <p class="summary-text">{{ result.summary }}</p>
         <p v-if="result.focus_assessment" class="summary-focus">{{ result.focus_assessment }}</p>
       </div>
+
+      <template v-if="violations.length">
+        <div class="section-head sub">
+          <div class="section-head-titles">
+            <h2>Порушення</h2>
+            <span class="section-note">{{ violations.length }}</span>
+          </div>
+          <span v-if="alertedAt" class="section-note">Лист керівнику надіслано {{ alertedAt }}</span>
+          <span v-else-if="hasCritical" class="section-note">
+            Лист не надіслано — пошту вказують у розділі «Працівники»
+          </span>
+        </div>
+
+        <div class="violations-list">
+          <div
+            v-for="(item, i) in violations"
+            :key="i"
+            class="panel violation-panel"
+            :class="{ 'is-critical': item.severity === 'critical' }"
+          >
+            <div class="violation-head">
+              <span class="verdict-badge" :class="severityMeta[item.severity]?.class">
+                {{ severityMeta[item.severity]?.label || item.severity }}
+              </span>
+              <span class="violation-type">{{ violationTypes[item.type] || 'Інше' }}</span>
+            </div>
+            <p class="violation-details">{{ item.details }}</p>
+            <p v-if="item.evidence" class="violation-evidence">Підстава: {{ item.evidence }}</p>
+            <p v-if="item.question" class="violation-question">
+              <strong>Що запитати:</strong> {{ item.question }}
+            </p>
+          </div>
+        </div>
+      </template>
 
       <div class="section-head sub">
         <div class="section-head-titles">
@@ -363,9 +418,59 @@ onUnmounted(stopPolling);
   color: #0e7d70;
 }
 
-.verdict-badge.is-personal {
+.verdict-badge.is-personal,
+.verdict-badge.is-critical {
   background: #fbe3e3;
   color: #b33c3c;
+}
+
+.violations-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.violation-panel {
+  padding: 13px 15px;
+  animation: fadeUp 0.35s ease both;
+}
+
+.violation-panel.is-critical {
+  border-left: 3px solid #b33c3c;
+}
+
+.violation-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 7px;
+}
+
+.violation-type {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.violation-details {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--ink);
+}
+
+.violation-evidence {
+  margin: 5px 0 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.violation-question {
+  margin: 8px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-dim);
 }
 
 .duration-value {

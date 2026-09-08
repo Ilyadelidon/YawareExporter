@@ -1,16 +1,18 @@
 <?php
 
 use App\Http\Controllers\Api\AiAnalysisController;
+use App\Http\Controllers\Api\AlertSettingsController;
 use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\BitrixAccountController;
 use App\Http\Controllers\Api\EmployeeController;
 use App\Http\Controllers\Api\EmployeeMemoryController;
 use App\Http\Controllers\Api\GoogleSpreadsheetController;
 use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\StatsController;
+use App\Http\Controllers\Api\TaskController;
 use App\Http\Controllers\Api\TelegramController;
 use App\Http\Controllers\Api\TimesheetController;
 use App\Http\Controllers\Api\TrelloAccountController;
-use App\Http\Controllers\Api\TrelloTaskController;
 use Illuminate\Support\Facades\Route;
 
 // Жорсткий ліміт: невдалий логін ставить у чергу Playwright-перевірку в Yaware
@@ -33,7 +35,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/reports/{report}/download', [ReportController::class, 'download']);
     Route::post('/reports', [ReportController::class, 'store']);
 
-    Route::get('/trello/tasks', [TrelloTaskController::class, 'index']);
+    // Таски за день з активного трекера користувача (Trello або Бітрікс24).
+    Route::get('/tasks', [TaskController::class, 'index']);
+    Route::put('/tasks/provider', [TaskController::class, 'updateProvider']);
 
     Route::get('/trello/status', [TrelloAccountController::class, 'status']);
     Route::post('/trello/token', [TrelloAccountController::class, 'storeToken']);
@@ -41,6 +45,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/trello/boards', [TrelloAccountController::class, 'boards']);
     Route::post('/trello/boards', [TrelloAccountController::class, 'createBoard']);
     Route::put('/trello/board', [TrelloAccountController::class, 'selectBoard']);
+
+    // Портал Бітрікса один на команду: статус і вибір свого акаунта доступні
+    // всім, підключення й відключення самого порталу — лише адміністратору.
+    Route::get('/bitrix/status', [BitrixAccountController::class, 'status']);
+    Route::get('/bitrix/users', [BitrixAccountController::class, 'users']);
+    Route::put('/bitrix/user', [BitrixAccountController::class, 'selectUser']);
+    Route::delete('/bitrix/user', [BitrixAccountController::class, 'destroyUser']);
 
     Route::get('/telegram/status', [TelegramController::class, 'status']);
     Route::post('/telegram/link', [TelegramController::class, 'link']);
@@ -55,9 +66,16 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/stats/activities', [StatsController::class, 'activities']);
 
     Route::middleware('admin')->group(function () {
+        Route::post('/bitrix/workspace', [BitrixAccountController::class, 'storeWorkspace']);
+        Route::delete('/bitrix/workspace', [BitrixAccountController::class, 'destroyWorkspace']);
+
         // AI-розбір дня бачить лише адміністратор.
         Route::get('/analysis', [AiAnalysisController::class, 'show']);
         Route::post('/analysis', [AiAnalysisController::class, 'store']);
+
+        // Пошти, на які керівнику йдуть листи про критичні порушення.
+        Route::get('/alerts/emails', [AlertSettingsController::class, 'show']);
+        Route::put('/alerts/emails', [AlertSettingsController::class, 'update']);
 
         Route::get('/timesheet', [TimesheetController::class, 'index']);
         Route::get('/employees', [EmployeeController::class, 'index']);

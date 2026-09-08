@@ -38,6 +38,9 @@ class OpsMonitor
     /** Падіння, старіше за це, — рядок у журналі, а не свіжа аварія. */
     private const FAILED_JOB_WINDOW_HOURS = 24;
 
+    /** За скільки днів назад шукаємо дні, що не потрапили в Google Таблицю. */
+    private const GOOGLE_UPLOAD_WINDOW_DAYS = 3;
+
     /** Та сама проблема не повторюється частіше, ніж раз на стільки годин. */
     private const REPEAT_ALERT_HOURS = 6;
 
@@ -71,6 +74,7 @@ class OpsMonitor
         return array_values(array_filter([
             $this->missedMorningRun($now),
             $this->failedReports($now),
+            $this->missingGoogleUploads($now),
             $this->stuckReports($now),
             $this->failedAnalyses($now),
             $this->failedJobs($now),
@@ -154,6 +158,29 @@ class OpsMonitor
             ->implode(', ');
 
         return "Звітів упало сьогодні: {$failed->count()} ({$names}).";
+    }
+
+    /**
+     * Звіт згенерувався, але його день не потрапив у Google Таблицю (частіше
+     * за все — тимчасова 500 від Google). Сам звіт при цьому «успішний», тож
+     * без окремої перевірки день просто тихо зникає з таблиці, і помічають це
+     * вже наприкінці місяця.
+     */
+    private function missingGoogleUploads(CarbonImmutable $now): ?string
+    {
+        $missing = Report::where('status', Report::STATUS_COMPLETED)
+            ->where('updated_at', '>=', $now->subDays(self::GOOGLE_UPLOAD_WINDOW_DAYS)->utc()->toDateTimeString())
+            ->get()
+            ->filter(fn (Report $report) => ReportSheetPublisher::uploadFailed($report));
+
+        if ($missing->isEmpty()) {
+            return null;
+        }
+
+        $days = $missing->map(fn (Report $report) => $report->report_date->format('d.m.Y'))->unique()->implode(', ');
+        $ids = $missing->pluck('id')->implode(' ');
+
+        return "Днів не потрапило в Google Таблицю: {$missing->count()} ({$days}). Долити: php artisan reports:sync-google {$ids}.";
     }
 
     /**

@@ -148,13 +148,13 @@ class AiAnalysisService
     }
 
     /**
-     * Таски зі знімка звіту; у знімку лежить повний формат Trello, беремо потрібне.
+     * Таски зі знімка звіту; у знімку лежить повний формат трекера, беремо потрібне.
      *
      * @return list<array<string, ?string>>
      */
     private function tasks(Report $report): array
     {
-        return Collection::make($report->trello_tasks ?? [])
+        return Collection::make($report->tasks ?? [])
             ->map(fn (array $task) => [
                 'name' => $task['name'] ?? null,
                 'comment' => $task['comment'] ?? null,

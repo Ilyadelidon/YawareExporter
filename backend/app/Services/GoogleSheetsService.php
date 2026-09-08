@@ -4,11 +4,17 @@ namespace App\Services;
 
 use App\Models\User;
 use Carbon\CarbonImmutable;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Http\Client\RequestException;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Sleep;
 use RuntimeException;
+use Throwable;
 
 /**
  * Вивантаження звітів у Google Таблицю під OAuth-акаунтом користувача.
@@ -48,6 +54,17 @@ class GoogleSheetsService
     private const MONTH_FIRST_DATE_COLUMN_INDEX = 3; // D
 
     private const MONTH_TOTALS_ROW = 41;
+
+    // Google час від часу відповідає 500 «Internal Error» на цілком коректний
+    // запит і за секунди починає його ж виконувати нормально. Тому вивантаження
+    // повторюється, а не падає з першої спроби.
+    private const TRANSIENT_ATTEMPTS = 4;
+
+    /** Пауза перед повтором у секундах; кожна наступна — удвічі довша. */
+    private const TRANSIENT_BACKOFF_SECONDS = 3;
+
+    /** Коди, за якими Google по суті просить просто повторити запит. */
+    private const TRANSIENT_STATUSES = [408, 429, 500, 502, 503, 504];
 
     public function __construct(private readonly ?string $spreadsheetId = null) {}
 
@@ -163,7 +180,7 @@ class GoogleSheetsService
                 ->throw();
 
             $this->prepareMonthSheet($spreadsheetId, CarbonImmutable::now());
-        } catch (\Throwable $exception) {
+        } catch (Throwable $exception) {
             // Без доступу чи місячного аркуша таблиця не готова — не лишаємо сироту на Drive.
             $this->request()->delete(self::DRIVE_API."/{$spreadsheetId}");
 
@@ -280,7 +297,7 @@ class GoogleSheetsService
                     ->json('user.emailAddress')
                     ?? throw new RuntimeException('Drive не повернув email акаунта.');
             });
-        } catch (\Throwable) {
+        } catch (Throwable) {
             return null;
         }
     }
@@ -313,25 +330,42 @@ class GoogleSheetsService
     public function uploadReportSheet(string $excelPath, string $sheetTitle, CarbonImmutable $reportDate): string
     {
         $spreadsheetId = $this->spreadsheetId();
-        $tempFileId = $this->convertExcelToTempSpreadsheet($excelPath, $sheetTitle);
 
-        try {
-            $sourceSheetId = $this->sheetProperties($tempFileId)[0]['sheetId']
-                ?? throw new RuntimeException('Тимчасова таблиця не містить жодного аркуша.');
+        // Знімок вкладок до вивантаження робиться один раз на всі спроби: якщо
+        // Google встиг створити копію, але відповів помилкою, вона лишиться
+        // в таблиці як «зайва» вкладка — і буде видалена після успішної спроби.
+        $knownSheetIds = null;
 
-            $copiedSheetId = $this->request()
-                ->post(self::SHEETS_API."/{$tempFileId}/sheets/{$sourceSheetId}:copyTo", [
-                    'destinationSpreadsheetId' => $spreadsheetId,
-                ])
-                ->throw()
-                ->json('sheetId');
+        return $this->withRetries("вивантаження вкладки «{$sheetTitle}»", function () use ($spreadsheetId, $excelPath, $sheetTitle, $reportDate, &$knownSheetIds) {
+            $knownSheetIds ??= array_column($this->sheetProperties($spreadsheetId), 'sheetId');
 
-            $this->placeCopiedSheet($spreadsheetId, $copiedSheetId, $sheetTitle, $reportDate);
+            $tempFileId = $this->convertExcelToTempSpreadsheet($excelPath, $sheetTitle);
 
-            return "https://docs.google.com/spreadsheets/d/{$spreadsheetId}/edit#gid={$copiedSheetId}";
-        } finally {
-            $this->request()->delete(self::DRIVE_API."/{$tempFileId}");
-        }
+            try {
+                $sourceSheet = $this->sheetProperties($tempFileId)[0]
+                    ?? throw new RuntimeException('Тимчасова таблиця не містить жодного аркуша.');
+
+                $copiedSheetId = $this->request()
+                    ->post(self::SHEETS_API."/{$tempFileId}/sheets/{$sourceSheet['sheetId']}:copyTo", [
+                        'destinationSpreadsheetId' => $spreadsheetId,
+                    ])
+                    ->throw()
+                    ->json('sheetId');
+
+                $this->placeCopiedSheet(
+                    $spreadsheetId,
+                    $copiedSheetId,
+                    $sheetTitle,
+                    $reportDate,
+                    $knownSheetIds,
+                    trim((string) $sourceSheet['title']),
+                );
+
+                return "https://docs.google.com/spreadsheets/d/{$spreadsheetId}/edit#gid={$copiedSheetId}";
+            } finally {
+                $this->deleteTempFile($tempFileId);
+            }
+        });
     }
 
     /**
@@ -342,8 +376,22 @@ class GoogleSheetsService
      */
     public function syncMonthSheet(string $dayTitle, CarbonImmutable $reportDate): void
     {
-        $spreadsheetId = $this->spreadsheetId();
         $monthTitle = 'Звіт за місяць '.$reportDate->format('m');
+
+        $this->withRetries(
+            "рознесення тасок по «{$monthTitle}»",
+            fn () => $this->writeMonthSheet($dayTitle, $reportDate, $monthTitle),
+        );
+    }
+
+    /**
+     * Один прохід рознесення. Викликається з-під withRetries: усе, що змінює
+     * структуру аркуша (нова колонка дати, додаткові рядки), спершу
+     * перечитується з таблиці, тому повторний прохід нічого не дублює.
+     */
+    private function writeMonthSheet(string $dayTitle, CarbonImmutable $reportDate, string $monthTitle): void
+    {
+        $spreadsheetId = $this->spreadsheetId();
 
         $dayTasks = $this->dayTaskRows($spreadsheetId, $dayTitle);
 
@@ -465,7 +513,7 @@ class GoogleSheetsService
             // підсумок — кінець списку. Без зупинки на порожньому рядку скан
             // доходив би до блоку офлайн-активностей нижче (він ділить колонку
             // з назвами тасок) і тягнув би його часи в місячний аркуш, коли
-            // день згенеровано без тасок Trello і рядка «Час разом» немає.
+            // день згенеровано без тасок трекера і рядка «Час разом» немає.
             if ($name === '' || $name === 'Час разом') {
                 break;
             }
@@ -789,10 +837,20 @@ class GoogleSheetsService
 
     /**
      * Перейменовує скопійований аркуш на дату звіту і ставить його на місце
-     * серед вкладок-дат; стару вкладку з такою ж назвою видаляє.
+     * серед вкладок-дат; стару вкладку з такою ж назвою видаляє. Разом з нею
+     * прибирає копії, що лишились від невдалих спроб (див. $knownSheetIds).
+     *
+     * @param  array<int, int>  $knownSheetIds  вкладки, що були в таблиці до вивантаження
+     * @param  string  $sourceTitle  назва аркуша-джерела: копія Google завжди містить її в назві
      */
-    private function placeCopiedSheet(string $spreadsheetId, int $copiedSheetId, string $title, CarbonImmutable $reportDate): void
-    {
+    private function placeCopiedSheet(
+        string $spreadsheetId,
+        int $copiedSheetId,
+        string $title,
+        CarbonImmutable $reportDate,
+        array $knownSheetIds = [],
+        string $sourceTitle = '',
+    ): void {
         $requests = [];
         $insertIndex = null;
         $year = $reportDate->year;
@@ -805,6 +863,12 @@ class GoogleSheetsService
             if (trim($properties['title']) === $title) {
                 $requests[] = ['deleteSheet' => ['sheetId' => $properties['sheetId']]];
                 $insertIndex ??= $properties['index'];
+
+                continue;
+            }
+
+            if ($this->isStrayCopy($properties, $knownSheetIds, $sourceTitle)) {
+                $requests[] = ['deleteSheet' => ['sheetId' => $properties['sheetId']]];
 
                 continue;
             }
@@ -827,6 +891,137 @@ class GoogleSheetsService
         $this->request()
             ->post(self::SHEETS_API."/{$spreadsheetId}:batchUpdate", ['requests' => $requests])
             ->throw();
+    }
+
+    /**
+     * Слід невдалої спроби: вкладки не було до вивантаження, це не наша щойно
+     * скопійована вкладка (перевірено вище) і назву їй дав Google при
+     * копіюванні («Копія <аркуш-джерело>» — префікс залежить від мови акаунта,
+     * тому шукаємо саме назву джерела).
+     *
+     * @param  array{sheetId: int, index: int, title: string}  $properties
+     * @param  array<int, int>  $knownSheetIds
+     */
+    private function isStrayCopy(array $properties, array $knownSheetIds, string $sourceTitle): bool
+    {
+        return $sourceTitle !== ''
+            && ! in_array($properties['sheetId'], $knownSheetIds, true)
+            && str_contains(trim($properties['title']), $sourceTitle);
+    }
+
+    /**
+     * Тимчасова копія на Drive потрібна лише на час конвертації. Її видалення
+     * не має зривати вже успішне вивантаження: у найгіршому разі на Drive
+     * лишиться файл-сирота, і про це буде запис у журналі.
+     */
+    private function deleteTempFile(string $tempFileId): void
+    {
+        try {
+            $this->request()->delete(self::DRIVE_API."/{$tempFileId}");
+        } catch (Throwable $exception) {
+            Log::warning("Тимчасовий файл Drive {$tempFileId} не видалено: {$exception->getMessage()}");
+        }
+    }
+
+    /**
+     * Повторює операцію, якщо Google відповів тимчасовою помилкою (500
+     * «Internal Error», 503, 429 — вони трапляються без причини з нашого боку
+     * і зникають за секунди).
+     *
+     * Повторюється саме вся операція, а не окремий HTTP-запит: кожна спроба
+     * наново перечитує стан таблиці, тому повтор не додає другу колонку дати,
+     * другий аркуш місяця чи зайві рядки — на відміну від сліпого ретраю
+     * запиту insertDimension/addSheet, який не є ідемпотентним.
+     *
+     * @template TResult
+     *
+     * @param  callable(): TResult  $operation
+     * @return TResult
+     */
+    private function withRetries(string $description, callable $operation): mixed
+    {
+        for ($attempt = 1; ; $attempt++) {
+            try {
+                return $operation();
+            } catch (Throwable $exception) {
+                if ($attempt >= self::TRANSIENT_ATTEMPTS || ! $this->isTransient($exception)) {
+                    throw $this->describeFailure($description, $attempt, $exception);
+                }
+
+                $pause = self::TRANSIENT_BACKOFF_SECONDS * 2 ** ($attempt - 1);
+
+                Log::warning(
+                    "Google: {$description} — спроба {$attempt} невдала ({$this->failureDetails($exception)}), "
+                    ."повтор через {$pause} с."
+                );
+
+                Sleep::for($pause)->seconds();
+            }
+        }
+    }
+
+    /**
+     * Тимчасова помилка — та, що минає сама: обрив зʼєднання або 5xx/429 від
+     * Google. Помилки прав, ліміту клітинок чи невалідного запиту повторювати
+     * марно — вони повернуться такими ж.
+     */
+    private function isTransient(Throwable $exception): bool
+    {
+        if ($exception instanceof ConnectionException) {
+            return true;
+        }
+
+        return $exception instanceof RequestException
+            && in_array($exception->response->status(), self::TRANSIENT_STATUSES, true);
+    }
+
+    /**
+     * Помилка з контекстом: що саме робили, скільки разів пробували і що
+     * відповів Google. Без цього в журналі лишається лише «HTTP request
+     * returned status code 500» — за ним не видно ні кроку, ні endpoint.
+     */
+    private function describeFailure(string $description, int $attempts, Throwable $exception): RuntimeException
+    {
+        $tries = $attempts > 1 ? " після {$attempts} спроб" : '';
+
+        return new RuntimeException(
+            "Google: {$description} не вдалось{$tries} — {$this->failureDetails($exception)}",
+            0,
+            $exception,
+        );
+    }
+
+    private function failureDetails(Throwable $exception): string
+    {
+        if (! $exception instanceof RequestException) {
+            return $exception->getMessage();
+        }
+
+        $response = $exception->response;
+        $message = $response->json('error.message');
+        $endpoint = $this->endpointOf($response);
+
+        return trim(sprintf(
+            'HTTP %d%s%s',
+            $response->status(),
+            is_string($message) && $message !== '' ? " {$message}" : '',
+            $endpoint ? " ({$endpoint})" : '',
+        ));
+    }
+
+    /**
+     * Шлях запиту, на якому впала операція, — щоб з тексту помилки одразу було
+     * видно крок (copyTo, batchUpdate, upload тощо).
+     */
+    private function endpointOf(Response $response): ?string
+    {
+        try {
+            $uri = $response->effectiveUri();
+        } catch (Throwable) {
+            return null;
+        }
+
+        return $uri ? urldecode($uri->getPath()) : null;
     }
 
     /**

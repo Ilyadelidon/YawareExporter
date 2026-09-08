@@ -7,8 +7,8 @@ use App\Models\Employee;
 use App\Models\Report;
 use App\Services\GoogleSheetsService;
 use App\Services\OpsMonitor;
+use App\Services\Tasks\TaskProviders;
 use App\Services\TelegramService;
-use App\Services\TrelloService;
 use Carbon\CarbonImmutable;
 use Carbon\Exceptions\InvalidFormatException;
 use Illuminate\Console\Command;
@@ -118,8 +118,10 @@ class GenerateDailyReports extends Command
             return 'до працівника не привʼязано користувача сервісу.';
         }
 
-        if (! TrelloService::forUser($employee->user)->isConfigured()) {
-            return 'не підключено Trello (токен або дошка відсутні).';
+        $provider = TaskProviders::forUser($employee->user);
+
+        if (! $provider->isConfigured()) {
+            return "не налаштовано таск-трекер {$provider->providerLabel()}.";
         }
 
         if (! GoogleSheetsService::forUser($employee->user)->isConfigured()) {

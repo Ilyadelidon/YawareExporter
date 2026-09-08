@@ -4,12 +4,17 @@ import Select from 'primevue/select';
 import client from '../api/client';
 import { useAuthStore } from '../stores/auth';
 
-const emit = defineEmits(['trello-changed', 'status']);
+const emit = defineEmits(['tracker-changed', 'status']);
 
 const auth = useAuthStore();
 
-// null | 'trello' | 'sheets' — яка інлайн-панель керування розгорнута
+// null | 'trello' | 'bitrix' | 'sheets' | 'telegram' — яка інлайн-панель розгорнута
 const managing = ref(null);
+
+// Активний таск-трекер користувача. Перемикання нічого не відв'язує:
+// налаштування обох провайдерів лишаються на місці.
+const provider = ref(auth.user?.task_provider || 'trello');
+const providerSwitching = ref(false);
 
 const loading = ref(true);
 const status = ref(null);
@@ -24,6 +29,22 @@ const saving = ref(false);
 const disconnecting = ref(false);
 
 const connected = computed(() => Boolean(status.value?.connected));
+
+const bitrixLoading = ref(true);
+const bitrix = ref(null);
+const portalUsers = ref([]);
+const portalUsersLoading = ref(false);
+const selectedBitrixUserId = ref(null);
+const bitrixSaving = ref(false);
+const bitrixUnlinking = ref(false);
+
+const bitrixConnected = computed(() => Boolean(bitrix.value?.connected));
+
+const isBitrix = computed(() => provider.value === 'bitrix');
+// «Активно» для смуги — налаштований саме вибраний трекер.
+const trackerConnected = computed(() => (isBitrix.value ? bitrixConnected.value : connected.value));
+// Бітрікс не можна зробити активним, поки адміністратор не підключив портал команди.
+const bitrixSwitchBlocked = computed(() => !bitrix.value?.workspace_connected);
 
 const googleLoading = ref(true);
 const google = ref(null);
@@ -54,14 +75,28 @@ const telegramSubtitle = computed(() => {
   if (telegramLinking.value) return 'Відкрийте Telegram і натисніть Start — чекаємо на підтвердження…';
   if (telegramConnected.value) return 'Сповіщення про звіти й таски приходять у ваш Telegram';
   if (!telegram.value?.configured) return 'Бот сповіщень ще не налаштований адміністратором';
-  return 'Сповіщення про готові звіти і незаповнені таски Trello';
+  return 'Сповіщення про готові звіти і незаповнені таски';
 });
 
+const trelloBadgeLabel = computed(() => (connected.value ? 'Налаштовано' : 'Не налаштовано'));
+
 const trelloSubtitle = computed(() => {
-  if (!connected.value) return 'Таски з дошки підтягуються у звіт і в колонку «Завдання» Excel';
+  if (!connected.value) return 'Власний акаунт і власна дошка — таски з неї підтягуються у звіт';
   const user = `@${status.value.username}`;
   if (status.value.board_id) return `${user} · дошка «${status.value.board_name || status.value.board_id}»`;
   return `${user} · дошку ще не вибрано`;
+});
+
+const bitrixBadgeLabel = computed(() => {
+  if (bitrixConnected.value) return 'Налаштовано';
+  return bitrix.value?.workspace_connected ? 'Акаунт не вибрано' : 'Портал не підключено';
+});
+
+const bitrixSubtitle = computed(() => {
+  if (!bitrix.value?.workspace_connected) return 'Портал команди підключає адміністратор — тоді трекер можна буде вибрати';
+  const portal = bitrix.value.portal_url?.replace(/^https:\/\//, '') || 'портал';
+  if (!bitrix.value.user_id) return `${portal} · ваш акаунт на порталі ще не вибрано`;
+  return `${portal} · ${bitrix.value.user_name}`;
 });
 
 const sheetsBadgeLabel = computed(() => {
@@ -76,8 +111,21 @@ const sheetsSubtitle = computed(() => {
   return 'Таблицю ще не створено — звіти не вивантажуються';
 });
 
+// Трекер вибирається кліком по всьому блоку — як радіо-варіант.
+// Бітрікс без підключеного порталу вибрати не можна, тому клік просто
+// відкриває його панель із поясненням, що робить адміністратор.
+function chooseTracker(next) {
+  if (providerSwitching.value) return;
+  if (next === 'bitrix' && bitrixSwitchBlocked.value) {
+    managing.value = 'bitrix';
+    return;
+  }
+  switchProvider(next);
+}
+
 function toggleManage(which) {
   managing.value = managing.value === which ? null : which;
+  if (managing.value === 'bitrix') loadPortalUsers();
 }
 
 async function loadStatus() {
@@ -126,7 +174,7 @@ function onAuthMessage(event) {
   actionMessage.value = `Trello підключено як @${event.data.username}.`;
   loading.value = true;
   loadStatus();
-  emit('trello-changed');
+  emit('tracker-changed');
 }
 
 async function disconnect() {
@@ -140,7 +188,7 @@ async function disconnect() {
     managing.value = null;
     actionMessage.value = 'Trello відключено.';
     await loadStatus();
-    emit('trello-changed');
+    emit('tracker-changed');
   } catch (error) {
     errorMessage.value = error.response?.data?.message || 'Не вдалося відключити Trello.';
   } finally {
@@ -157,7 +205,7 @@ async function selectBoard() {
     const { data } = await client.put('/trello/board', { board_id: selectedBoardId.value });
     actionMessage.value = `Активна дошка — «${data.board.name}».`;
     await loadStatus();
-    emit('trello-changed');
+    emit('tracker-changed');
   } catch (error) {
     errorMessage.value = error.response?.data?.message || 'Не вдалося вибрати дошку.';
   } finally {
@@ -175,11 +223,101 @@ async function createBoard() {
     actionMessage.value = `Дошку «${data.board.name}» створено і зроблено активною.`;
     newBoardName.value = '';
     await loadStatus();
-    emit('trello-changed');
+    emit('tracker-changed');
   } catch (error) {
     errorMessage.value = error.response?.data?.message || 'Не вдалося створити дошку.';
   } finally {
     saving.value = false;
+  }
+}
+
+async function loadBitrixStatus() {
+  try {
+    const { data } = await client.get('/bitrix/status');
+    bitrix.value = data;
+    selectedBitrixUserId.value = data.user_id || null;
+  } catch (error) {
+    errorMessage.value = error.response?.data?.message || 'Не вдалося отримати стан Бітрікс24.';
+  } finally {
+    bitrixLoading.value = false;
+  }
+}
+
+// Список користувачів порталу тягнемо лише коли він справді потрібен —
+// це запит до чужого API з жорстким лімітом.
+async function loadPortalUsers() {
+  if (portalUsers.value.length || !bitrix.value?.workspace_connected) return;
+  portalUsersLoading.value = true;
+  try {
+    const { data } = await client.get('/bitrix/users');
+    portalUsers.value = data.data;
+  } catch (error) {
+    errorMessage.value = error.response?.data?.message || 'Не вдалося отримати список користувачів порталу.';
+  } finally {
+    portalUsersLoading.value = false;
+  }
+}
+
+async function selectBitrixUser() {
+  if (!selectedBitrixUserId.value) return;
+  bitrixSaving.value = true;
+  actionMessage.value = '';
+  errorMessage.value = '';
+  try {
+    const { data } = await client.put('/bitrix/user', { bitrix_user_id: selectedBitrixUserId.value });
+    actionMessage.value = `Ваш акаунт у Бітріксі — ${data.user.name}.`;
+    await loadBitrixStatus();
+    emit('tracker-changed');
+  } catch (error) {
+    errorMessage.value = error.response?.data?.message || 'Не вдалося зберегти акаунт Бітрікса.';
+  } finally {
+    bitrixSaving.value = false;
+  }
+}
+
+async function unlinkBitrixUser() {
+  if (!window.confirm('Відвʼязати ваш акаунт Бітрікса? Портал команди залишиться підключеним.')) return;
+  bitrixUnlinking.value = true;
+  actionMessage.value = '';
+  errorMessage.value = '';
+  try {
+    const { data } = await client.delete('/bitrix/user');
+    actionMessage.value = data.message;
+    selectedBitrixUserId.value = null;
+    await loadBitrixStatus();
+    emit('tracker-changed');
+  } catch (error) {
+    errorMessage.value = error.response?.data?.message || 'Не вдалося відвʼязати акаунт.';
+  } finally {
+    bitrixUnlinking.value = false;
+  }
+}
+
+// Перемикання трекера: звіти після нього беруть таски з іншого джерела,
+// але налаштування попереднього лишаються — можна повернутись назад.
+async function switchProvider(next) {
+  if (next === provider.value || providerSwitching.value) return;
+  if (next === 'bitrix' && bitrixSwitchBlocked.value) return;
+  providerSwitching.value = true;
+  actionMessage.value = '';
+  errorMessage.value = '';
+  try {
+    const { data } = await client.put('/tasks/provider', { provider: next });
+    provider.value = data.provider;
+    if (auth.user) auth.user.task_provider = data.provider;
+    actionMessage.value = data.message;
+    // Якщо новий трекер ще не готовий до звітів — одразу розгортаємо його налаштування.
+    if (data.provider === 'bitrix') {
+      await loadPortalUsers();
+      if (!bitrixConnected.value) managing.value = 'bitrix';
+    } else if (!connected.value) {
+      managing.value = 'trello';
+    }
+    emit('tracker-changed');
+  } catch (error) {
+    errorMessage.value = error.response?.data?.message || 'Не вдалося перемкнути таск-трекер.';
+  } finally {
+    providerSwitching.value = false;
   }
 }
 
@@ -312,15 +450,17 @@ async function detachSpreadsheet() {
 // Батьківська сторінка блокує формування звіту, поки обидві інтеграції не активні.
 watchEffect(() => {
   emit('status', {
-    loaded: !loading.value && !googleLoading.value,
-    trello: connected.value,
+    loaded: !loading.value && !googleLoading.value && !bitrixLoading.value,
+    tracker: trackerConnected.value,
     sheets: sheetsActive.value,
+    provider: provider.value,
   });
 });
 
 onMounted(() => {
   window.addEventListener('message', onAuthMessage);
   loadStatus();
+  loadBitrixStatus();
   loadGoogleStatus();
   loadTelegramStatus();
 });
@@ -335,9 +475,264 @@ onUnmounted(() => {
   <div class="integrations-strip-wrap">
     <div class="strip-label">Підключені інтеграції</div>
 
-    <div v-if="loading || googleLoading || telegramLoading" class="skeleton strip-skeleton"></div>
+    <div v-if="loading || googleLoading || telegramLoading || bitrixLoading" class="skeleton strip-skeleton"></div>
 
     <template v-else>
+      <!-- Таск-трекер: обидва джерела завжди на виду, активним працює одне -->
+      <div class="group-label">
+        <span>Таск-трекер</span>
+        <span class="group-hint">звідки беруться завдання для звіту — натисніть на блок, щоб зробити трекер активним</span>
+      </div>
+
+      <div class="strip is-stacked">
+
+        <!-- Рядок трекера і його панель — один блок смуги, тож «Керувати»
+             розгортає налаштування під самим трекером, а не під списком. -->
+        <div class="tracker-block">
+          <!-- Trello -->
+          <div
+            class="strip-row is-selectable"
+            :class="{ 'is-managing': managing === 'trello', 'is-chosen': !isBitrix, 'is-idle': isBitrix }"
+            role="radio"
+            :aria-checked="!isBitrix"
+            :tabindex="isBitrix ? 0 : -1"
+            :title="isBitrix ? 'Зробити Trello активним трекером' : null"
+            @click="chooseTracker('trello')"
+            @keydown.enter.prevent="chooseTracker('trello')"
+            @keydown.space.prevent="chooseTracker('trello')"
+          >
+            <svg class="strip-radio" :class="{ 'is-on': !isBitrix }" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+              <circle v-if="!isBitrix" cx="8" cy="8" r="7.2" fill="currentColor"></circle>
+              <circle v-else cx="8" cy="8" r="7.2" fill="none" stroke="currentColor" stroke-width="1.6"></circle>
+            </svg>
+            <div class="strip-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" fill="#0079BF"></rect><rect x="4.5" y="4.5" width="6.5" height="10.5" fill="#ffffff"></rect><rect x="13" y="4.5" width="6.5" height="6.5" fill="#ffffff"></rect></svg>
+            </div>
+            <div class="strip-info">
+              <div class="strip-title-row">
+                <span class="strip-name">Trello</span>
+                <span v-if="!isBitrix" class="strip-chip">Активний трекер</span>
+                <span class="strip-badge" :class="{ 'is-off': !connected }">
+                  <span class="strip-badge-dot"></span>{{ trelloBadgeLabel }}
+                </span>
+              </div>
+              <div class="strip-subtitle">{{ trelloSubtitle }}</div>
+            </div>
+            <button
+              class="strip-manage-btn"
+              :class="{ 'is-solid': !isBitrix && !connected }"
+              type="button"
+              @click.stop="toggleManage('trello')"
+            >
+              {{ managing === 'trello' ? 'Згорнути' : (connected ? 'Керувати' : 'Налаштувати') }}
+            </button>
+          </div>
+
+          <!-- Trello inline management panel -->
+          <div v-if="managing === 'trello'" class="manage-panel is-inline">
+            <div class="panel-head">
+              <div class="panel-head-note">Trello · власний акаунт і власна дошка на кожного працівника</div>
+              <button class="panel-close" type="button" @click="managing = null">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+              </button>
+            </div>
+
+            <p v-if="isBitrix" class="panel-note panel-inactive-note">
+              Зараз активний трекер — Бітрікс24. Налаштування Trello зберігаються, але у звіт
+              його таски не потраплять, поки не зробите Trello активним.
+            </p>
+
+            <template v-if="connected">
+              <div class="panel-head-note panel-account-note">
+                Підключено як <strong>@{{ status.username }}</strong>
+              </div>
+              <div class="panel-grid">
+                <div>
+                  <div class="field-label">Активна дошка</div>
+                  <div class="field-row">
+                    <Select
+                      v-model="selectedBoardId"
+                      :options="boards"
+                      option-label="name"
+                      option-value="id"
+                      :loading="boardsLoading"
+                      placeholder="Виберіть дошку зі свого Trello"
+                      class="panel-select"
+                    />
+                    <button
+                      class="panel-btn"
+                      type="button"
+                      :disabled="saving || !selectedBoardId || selectedBoardId === status.board_id"
+                      @click="selectBoard"
+                    >
+                      Обрати
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <div class="field-label">Створити нову дошку</div>
+                  <div class="field-row">
+                    <input
+                      v-model="newBoardName"
+                      type="text"
+                      class="panel-input"
+                      placeholder="Назва дошки"
+                      maxlength="255"
+                      @keyup.enter="createBoard"
+                    />
+                    <button class="panel-btn is-dim" type="button" :disabled="saving || !newBoardName.trim()" @click="createBoard">
+                      {{ saving ? 'Зачекайте…' : 'Створити' }}
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div class="panel-foot">
+                <a
+                  v-if="status.board_url"
+                  :href="status.board_url"
+                  target="_blank"
+                  rel="noopener"
+                  class="panel-open-link"
+                >Відкрити дошку «{{ status.board_name || status.board_id }}» ↗</a>
+                <span v-else class="panel-note">Нова дошка створюється зі списками й мітками з шаблону.</span>
+                <button class="panel-link" type="button" :disabled="disconnecting" @click="disconnect">
+                  {{ disconnecting ? 'Відключаємо…' : 'Відключити Trello' }}
+                </button>
+              </div>
+            </template>
+            <template v-else>
+              <p class="panel-note">
+                У Trello кожен працівник підключає власний акаунт і власну дошку —
+                таски з неї потраплять у звіт і в колонку «Завдання» Excel.
+              </p>
+              <div class="panel-foot">
+                <span></span>
+                <button class="panel-btn" type="button" @click="connect">Підключити Trello</button>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <div class="tracker-block">
+          <!-- Бітрікс24 -->
+          <div
+            class="strip-row is-selectable"
+            :class="{
+              'is-managing': managing === 'bitrix',
+              'is-chosen': isBitrix,
+              'is-idle': !isBitrix,
+              'is-blocked': bitrixSwitchBlocked,
+            }"
+            role="radio"
+            :aria-checked="isBitrix"
+            :tabindex="isBitrix ? -1 : 0"
+            :title="bitrixSwitchBlocked
+              ? 'Портал команди ще не підключив адміністратор'
+              : (isBitrix ? null : 'Зробити Бітрікс24 активним трекером')"
+            @click="chooseTracker('bitrix')"
+            @keydown.enter.prevent="chooseTracker('bitrix')"
+            @keydown.space.prevent="chooseTracker('bitrix')"
+          >
+            <svg class="strip-radio" :class="{ 'is-on': isBitrix }" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+              <circle v-if="isBitrix" cx="8" cy="8" r="7.2" fill="currentColor"></circle>
+              <circle v-else cx="8" cy="8" r="7.2" fill="none" stroke="currentColor" stroke-width="1.6"></circle>
+            </svg>
+            <div class="strip-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" fill="#1B65A6"></rect><circle cx="12" cy="12" r="6.2" fill="none" stroke="#ffffff" stroke-width="2.4"></circle><circle cx="12" cy="12" r="2" fill="#ffffff"></circle></svg>
+            </div>
+            <div class="strip-info">
+              <div class="strip-title-row">
+                <span class="strip-name">Бітрікс24</span>
+                <span v-if="isBitrix" class="strip-chip">Активний трекер</span>
+                <span class="strip-badge" :class="{ 'is-off': !bitrixConnected }">
+                  <span class="strip-badge-dot"></span>{{ bitrixBadgeLabel }}
+                </span>
+              </div>
+              <div class="strip-subtitle">{{ bitrixSubtitle }}</div>
+            </div>
+            <button
+              class="strip-manage-btn"
+              :class="{ 'is-solid': isBitrix && !bitrixConnected }"
+              type="button"
+              @click.stop="toggleManage('bitrix')"
+            >
+              {{ managing === 'bitrix' ? 'Згорнути' : (bitrixConnected ? 'Керувати' : 'Налаштувати') }}
+            </button>
+          </div>
+
+          <!-- Бітрікс24 inline management panel -->
+          <div v-if="managing === 'bitrix'" class="manage-panel is-inline">
+            <div class="panel-head">
+              <div class="panel-head-note">Бітрікс24 · один портал на команду, свій акаунт у кожного</div>
+              <button class="panel-close" type="button" @click="managing = null">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+              </button>
+            </div>
+
+            <p v-if="!isBitrix && bitrix?.workspace_connected" class="panel-note panel-inactive-note">
+              Зараз активний трекер — Trello. Виберіть свій акаунт на порталі, а потім
+              натисніть на блок «Бітрікс24» вище, щоб таски бралися з нього.
+            </p>
+
+            <template v-if="!bitrix?.workspace_connected">
+              <p class="panel-note">
+                Портал команди ще не підключено. Робоча область Бітрікс24 одна на всіх —
+                її підключає адміністратор одним вхідним вебхуком у розділі «Працівники».
+                Поки цього не зроблено, вибрати Бітрікс як трекер не можна.
+              </p>
+            </template>
+            <template v-else>
+              <div class="field-label">Ваш акаунт на порталі</div>
+              <div class="field-row">
+                <Select
+                  v-model="selectedBitrixUserId"
+                  :options="portalUsers"
+                  option-label="name"
+                  option-value="id"
+                  :loading="portalUsersLoading"
+                  placeholder="Виберіть себе зі списку користувачів порталу"
+                  class="panel-select"
+                />
+                <button
+                  class="panel-btn"
+                  type="button"
+                  :disabled="bitrixSaving || !selectedBitrixUserId || selectedBitrixUserId === bitrix.user_id"
+                  @click="selectBitrixUser"
+                >
+                  {{ bitrixSaving ? 'Зберігаємо…' : 'Обрати' }}
+                </button>
+              </div>
+              <p class="panel-note panel-account-note">
+                У звіт потрапляють таски, де ви — відповідальний, із плановими датами
+                початку й завершення за цей день.
+              </p>
+              <div class="panel-foot">
+                <a
+                  :href="bitrix.portal_url"
+                  target="_blank"
+                  rel="noopener"
+                  class="panel-open-link"
+                >Відкрити портал ↗</a>
+                <button
+                  v-if="bitrix.user_id"
+                  class="panel-link"
+                  type="button"
+                  :disabled="bitrixUnlinking"
+                  @click="unlinkBitrixUser"
+                >
+                  {{ bitrixUnlinking ? 'Відвʼязуємо…' : 'Відвʼязати акаунт' }}
+                </button>
+              </div>
+            </template>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="group-label is-second">
+        <span>Звіти та сповіщення</span>
+      </div>
+
       <div class="strip">
 
         <!-- Google Sheets -->
@@ -357,26 +752,6 @@ onUnmounted(() => {
           <button class="strip-manage-btn" type="button" @click="toggleManage('sheets')">
             {{ managing === 'sheets' ? 'Згорнути' : 'Керувати' }}
           </button>
-        </div>
-
-        <!-- Trello -->
-        <div class="strip-row" :class="{ 'is-managing': managing === 'trello' }">
-          <div class="strip-icon">
-            <svg width="18" height="18" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" fill="#0079BF"></rect><rect x="4.5" y="4.5" width="6.5" height="10.5" fill="#ffffff"></rect><rect x="13" y="4.5" width="6.5" height="6.5" fill="#ffffff"></rect></svg>
-          </div>
-          <div class="strip-info">
-            <div class="strip-title-row">
-              <span class="strip-name">Trello</span>
-              <span class="strip-badge" :class="{ 'is-off': !connected }">
-                <span class="strip-badge-dot"></span>{{ connected ? 'Активно' : 'Не підключено' }}
-              </span>
-            </div>
-            <div class="strip-subtitle">{{ trelloSubtitle }}</div>
-          </div>
-          <button v-if="connected" class="strip-manage-btn" type="button" @click="toggleManage('trello')">
-            {{ managing === 'trello' ? 'Згорнути' : 'Керувати' }}
-          </button>
-          <button v-else class="strip-manage-btn is-solid" type="button" @click="connect">Підключити</button>
         </div>
 
         <!-- Telegram -->
@@ -407,69 +782,6 @@ onUnmounted(() => {
           </button>
         </div>
 
-      </div>
-
-      <!-- Trello inline management panel -->
-      <div v-if="managing === 'trello' && connected" class="manage-panel">
-        <div class="panel-head">
-          <div class="panel-head-note">Trello · підключено як <strong>@{{ status.username }}</strong></div>
-          <button class="panel-close" type="button" @click="managing = null">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-          </button>
-        </div>
-        <div class="panel-grid">
-          <div>
-            <div class="field-label">Активна дошка</div>
-            <div class="field-row">
-              <Select
-                v-model="selectedBoardId"
-                :options="boards"
-                option-label="name"
-                option-value="id"
-                :loading="boardsLoading"
-                placeholder="Виберіть дошку зі свого Trello"
-                class="panel-select"
-              />
-              <button
-                class="panel-btn"
-                type="button"
-                :disabled="saving || !selectedBoardId || selectedBoardId === status.board_id"
-                @click="selectBoard"
-              >
-                Обрати
-              </button>
-            </div>
-          </div>
-          <div>
-            <div class="field-label">Створити нову дошку</div>
-            <div class="field-row">
-              <input
-                v-model="newBoardName"
-                type="text"
-                class="panel-input"
-                placeholder="Назва дошки"
-                maxlength="255"
-                @keyup.enter="createBoard"
-              />
-              <button class="panel-btn is-dim" type="button" :disabled="saving || !newBoardName.trim()" @click="createBoard">
-                {{ saving ? 'Зачекайте…' : 'Створити' }}
-              </button>
-            </div>
-          </div>
-        </div>
-        <div class="panel-foot">
-          <a
-            v-if="status.board_url"
-            :href="status.board_url"
-            target="_blank"
-            rel="noopener"
-            class="panel-open-link"
-          >Відкрити дошку «{{ status.board_name || status.board_id }}» ↗</a>
-          <span v-else class="panel-note">Нова дошка створюється зі списками й мітками з шаблону.</span>
-          <button class="panel-link" type="button" :disabled="disconnecting" @click="disconnect">
-            {{ disconnecting ? 'Відключаємо…' : 'Відключити Trello' }}
-          </button>
-        </div>
       </div>
 
       <!-- Google Sheets inline management panel -->
@@ -570,7 +882,7 @@ onUnmounted(() => {
         </div>
         <p class="panel-note">
           Бот повідомляє про згенерований звіт (з посиланням на вкладку Google Таблиці),
-          нагадує заповнити таски Trello, якщо за день їх немає, і попереджає про помилки генерації.
+          нагадує заповнити таски, якщо за день їх немає, і попереджає про помилки генерації.
         </p>
         <div class="panel-foot">
           <span></span>
@@ -610,12 +922,44 @@ onUnmounted(() => {
   height: 61px;
 }
 
+/* Підзаголовок групи: трекери окремо від «Звіти та сповіщення». */
+.group-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+}
+
+.group-label.is-second {
+  margin-top: 14px;
+}
+
+.group-hint {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--muted-2);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
 .strip {
   display: flex;
   align-items: stretch;
   gap: 1px;
   background: var(--line);
   border: 1px solid var(--line);
+}
+
+/* Трекери показуємо один під одним: обидва завжди видно, і в рядку
+   вистачає місця під кнопку перемикання. */
+.strip.is-stacked {
+  flex-direction: column;
 }
 
 .strip-row {
@@ -635,6 +979,54 @@ onUnmounted(() => {
 
 .strip-row.is-managing {
   background: #edf6f5;
+}
+
+/* Активний трекер — акцентна смуга зліва; неактивний приглушений,
+   але лишається на виду разом зі своїм станом. */
+.strip-row.is-chosen {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.strip-row.is-idle .strip-icon {
+  opacity: 0.55;
+}
+
+.strip-row.is-idle .strip-name {
+  color: var(--muted);
+}
+
+/* Увесь блок трекера — це вибір: клік по ньому робить трекер активним. */
+.strip-row.is-selectable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.strip-row.is-selectable.is-chosen,
+.strip-row.is-selectable.is-blocked {
+  cursor: default;
+}
+
+.strip-row.is-selectable:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* Позначка вибору малюється SVG, а не рамкою з ::after: на звичайному екрані
+   (DPR 1) CSS-коло 14px із точкою 6px усередині лягає в піксельну сітку
+   квадратом і зафарбовується нерівно. Вектор згладжується коректно, а активний
+   стан — суцільний диск, у якому дрібної внутрішньої фігури просто немає. */
+.strip-radio {
+  flex-shrink: 0;
+  display: block;
+  color: var(--muted-2);
+}
+
+.strip-radio.is-on {
+  color: var(--accent);
+}
+
+.strip-row.is-blocked .strip-radio {
+  opacity: 0.45;
 }
 
 .strip-icon {
@@ -688,6 +1080,19 @@ onUnmounted(() => {
   color: var(--muted);
 }
 
+.strip-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--accent);
+  padding: 2px 7px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  flex-shrink: 0;
+}
+
 .strip-badge-dot {
   width: 5px;
   height: 5px;
@@ -738,6 +1143,19 @@ onUnmounted(() => {
   border-top: none;
   padding: 16px;
   animation: slideDown 0.18s ease both;
+}
+
+/* Трекер разом зі своєю панеллю — один елемент смуги: налаштування
+   розкриваються під самим трекером. Рамку дає смуга, всередині блока
+   лишається тільки лінія-роздільник. */
+.tracker-block {
+  background: var(--surface);
+  min-width: 0;
+}
+
+.manage-panel.is-inline {
+  border: none;
+  border-top: 1px solid var(--line);
 }
 
 .panel-head {
@@ -901,6 +1319,14 @@ onUnmounted(() => {
 
 .panel-link:hover:not(:disabled) {
   color: #c0392b;
+}
+
+.panel-inactive-note {
+  margin-bottom: 12px;
+}
+
+.panel-account-note {
+  margin-bottom: 12px;
 }
 
 .strip-msg {

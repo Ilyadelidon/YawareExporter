@@ -20,11 +20,14 @@ const loading = ref(true);
 const generating = ref(false);
 const downloading = ref(false);
 const errorMessage = ref('');
-const trelloTasks = ref([]);
-const trelloLoading = ref(false);
-const trelloError = ref('');
-const trelloNotConnected = ref(false);
-const trelloSnapshot = ref(false);
+const tasks = ref([]);
+const tasksLoading = ref(false);
+const tasksError = ref('');
+const trackerNotConnected = ref(false);
+const tasksSnapshot = ref(false);
+// Який трекер віддав таски: приходить у відповіді /tasks, до першого запиту
+// беремо вибір користувача з профілю.
+const tasksProvider = ref(null);
 
 let pollTimer = null;
 
@@ -40,6 +43,8 @@ const labelColors = {
   pink: '#ff78cb',
   black: '#344563',
 };
+
+const PROVIDER_LABELS = { trello: 'Trello', bitrix: 'Бітрікс24' };
 
 const MONTHS_UK = ['січня', 'лютого', 'березня', 'квітня', 'травня', 'червня', 'липня', 'серпня', 'вересня', 'жовтня', 'листопада', 'грудня'];
 
@@ -57,8 +62,13 @@ const isFailed = computed(() => report.value?.status === 'failed');
 // Стан інтеграцій приходить зі смуги внизу сторінки; без обох активних
 // інтеграцій формування звіту заблоковане. Адміну смуга не показується,
 // тому для нього ця перевірка не діє.
-const integrations = ref({ loaded: false, trello: false, sheets: false });
-const integrationsOk = computed(() => auth.isAdmin || (integrations.value.loaded && integrations.value.trello && integrations.value.sheets));
+const integrations = ref({ loaded: false, tracker: false, sheets: false, provider: null });
+const integrationsOk = computed(() => auth.isAdmin || (integrations.value.loaded && integrations.value.tracker && integrations.value.sheets));
+
+// Назва активного таск-трекера для підказок і банерів.
+const trackerLabel = computed(() => PROVIDER_LABELS[
+  tasksProvider.value || integrations.value.provider || auth.user?.task_provider
+] || 'Trello');
 
 // Адмін переглядає звіти працівників, але формує лише власні —
 // кожен працівник формує звіт сам зі своїми інтеграціями.
@@ -68,7 +78,7 @@ const integrationsHint = computed(() => {
   if (viewingOther.value) return '';
   if (!integrations.value.loaded || integrationsOk.value) return '';
   const actions = [];
-  if (!integrations.value.trello) actions.push('підключіть Trello');
+  if (!integrations.value.tracker) actions.push(`налаштуйте ${trackerLabel.value}`);
   if (!integrations.value.sheets) actions.push('налаштуйте Google Таблицю');
   return `Щоб формувати звіти, ${actions.join(' і ')} у блоці «Підключені інтеграції» внизу сторінки.`;
 });
@@ -132,7 +142,7 @@ const detailRows = computed(() => {
 });
 
 const taskCountLabel = computed(() => {
-  const n = trelloTasks.value.length;
+  const n = tasks.value.length;
   const mod10 = n % 10;
   const mod100 = n % 100;
   const word = (mod10 >= 1 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) ? 'завдання' : 'завдань';
@@ -162,8 +172,8 @@ async function refreshReport() {
   } catch {
     // тимчасова помилка мережі — наступний тік поллінгу спробує ще раз
   }
-  if (isDone.value && !trelloTasks.value.length) {
-    applyTrelloTasks();
+  if (isDone.value && !tasks.value.length) {
+    applyTasks();
   }
   schedulePoll();
 }
@@ -173,10 +183,10 @@ async function loadReport() {
   loading.value = true;
   errorMessage.value = '';
   report.value = null;
-  trelloTasks.value = [];
-  trelloError.value = '';
-  trelloNotConnected.value = false;
-  trelloSnapshot.value = false;
+  tasks.value = [];
+  tasksError.value = '';
+  trackerNotConnected.value = false;
+  tasksSnapshot.value = false;
 
   try {
     if (auth.isAdmin && !selectedEmployee.value) {
@@ -196,7 +206,7 @@ async function loadReport() {
   }
 
   if (isDone.value) {
-    applyTrelloTasks();
+    applyTasks();
   }
   schedulePoll();
 }
@@ -217,10 +227,10 @@ async function generateReport() {
 
   errorMessage.value = '';
   generating.value = true;
-  trelloTasks.value = [];
-  trelloError.value = '';
-  trelloNotConnected.value = false;
-  trelloSnapshot.value = false;
+  tasks.value = [];
+  tasksError.value = '';
+  trackerNotConnected.value = false;
+  tasksSnapshot.value = false;
 
   try {
     const payload = { report_date: toIso(selectedDate.value) };
@@ -238,35 +248,37 @@ async function generateReport() {
 }
 
 // Готовий звіт містить знімок тасок на момент генерації — показуємо його,
-// щоб зміна активної дошки не переписувала вже сформовані звіти. Живий запит
+// щоб зміни в трекері не переписували вже сформовані звіти. Живий запит
 // лишається fallback-ом для старих звітів без знімка.
-function applyTrelloTasks() {
-  if (Array.isArray(report.value?.trello_tasks)) {
-    trelloTasks.value = report.value.trello_tasks;
-    trelloSnapshot.value = true;
-    trelloError.value = '';
-    trelloNotConnected.value = false;
+function applyTasks() {
+  if (Array.isArray(report.value?.tasks)) {
+    tasks.value = report.value.tasks;
+    tasksSnapshot.value = true;
+    tasksError.value = '';
+    trackerNotConnected.value = false;
     return;
   }
-  loadTrelloTasks(toIso(selectedDate.value));
+  loadTasks(toIso(selectedDate.value));
 }
 
-async function loadTrelloTasks(date) {
-  trelloLoading.value = true;
-  trelloError.value = '';
-  trelloNotConnected.value = false;
-  trelloSnapshot.value = false;
+async function loadTasks(date) {
+  tasksLoading.value = true;
+  tasksError.value = '';
+  trackerNotConnected.value = false;
+  tasksSnapshot.value = false;
   try {
-    const { data } = await client.get('/trello/tasks', { params: { date } });
-    trelloTasks.value = data.data;
+    const { data } = await client.get('/tasks', { params: { date } });
+    tasks.value = data.data;
+    tasksProvider.value = data.provider || tasksProvider.value;
   } catch (error) {
+    tasksProvider.value = error.response?.data?.provider || tasksProvider.value;
     if (error.response?.data?.not_connected) {
-      trelloNotConnected.value = true;
+      trackerNotConnected.value = true;
     } else {
-      trelloError.value = error.response?.data?.message || 'Не вдалося отримати таски з Trello.';
+      tasksError.value = error.response?.data?.message || `Не вдалося отримати таски з ${trackerLabel.value}.`;
     }
   } finally {
-    trelloLoading.value = false;
+    tasksLoading.value = false;
   }
 }
 
@@ -288,11 +300,11 @@ async function downloadReport() {
   }
 }
 
-// Після підключення/зміни дошки Trello у смузі інтеграцій підтягуємо таски наживо,
-// якщо звіт готовий і показується не знімок на момент генерації.
-function onTrelloChanged() {
-  if (isDone.value && !trelloSnapshot.value) {
-    loadTrelloTasks(toIso(selectedDate.value));
+// Після зміни трекера (підключення, вибір дошки чи акаунта) у смузі інтеграцій
+// підтягуємо таски наживо, якщо звіт готовий і показується не знімок.
+function onTrackerChanged() {
+  if (isDone.value && !tasksSnapshot.value) {
+    loadTasks(toIso(selectedDate.value));
   }
 }
 
@@ -469,31 +481,31 @@ onUnmounted(() => clearTimeout(pollTimer));
       <section class="column">
         <div class="column-head">
           <h2>Виконані таски</h2>
-          <span v-if="!trelloLoading && !trelloError && !trelloNotConnected" class="column-head-note">{{ taskCountLabel }}<template v-if="trelloSnapshot"> · на момент генерації</template></span>
+          <span v-if="!tasksLoading && !tasksError && !trackerNotConnected" class="column-head-note">{{ taskCountLabel }}<template v-if="tasksSnapshot"> · на момент генерації</template></span>
         </div>
 
-        <div v-if="trelloLoading" class="skeleton tasks-skeleton"></div>
+        <div v-if="tasksLoading" class="skeleton tasks-skeleton"></div>
 
-        <div v-else-if="trelloNotConnected" class="hint-banner">
+        <div v-else-if="trackerNotConnected" class="hint-banner">
           <div class="hint-banner-icon">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
           </div>
           <div class="hint-banner-text">
-            Trello не підключено — підключіть акаунт у блоці «Підключені інтеграції»
+            {{ trackerLabel }} не налаштовано — зробіть це у блоці «Підключені інтеграції»
             внизу сторінки, щоб таски підтягувались у звіт.
           </div>
         </div>
 
-        <Message v-else-if="trelloError" severity="warn" :closable="false">
-          {{ trelloError }}
+        <Message v-else-if="tasksError" severity="warn" :closable="false">
+          {{ tasksError }}
         </Message>
 
-        <div v-else-if="!trelloTasks.length" class="panel empty-panel">
+        <div v-else-if="!tasks.length" class="panel empty-panel">
           Тасок за цю дату немає.
         </div>
 
         <div v-else class="task-list">
-          <div v-for="task in trelloTasks" :key="task.id" class="panel task-card">
+          <div v-for="task in tasks" :key="task.id" class="panel task-card">
             <div class="task-main">
               <div class="task-title-row">
                 <a :href="task.url" target="_blank" rel="noopener" class="task-title">{{ task.name }}</a>
@@ -564,7 +576,7 @@ onUnmounted(() => clearTimeout(pollTimer));
       :version="report.generated_at || ''"
     />
 
-    <IntegrationsStrip v-if="!auth.isAdmin" @trello-changed="onTrelloChanged" @status="onIntegrationsStatus" />
+    <IntegrationsStrip v-if="!auth.isAdmin" @tracker-changed="onTrackerChanged" @status="onIntegrationsStatus" />
 
   </div>
 </template>
@@ -944,7 +956,7 @@ onUnmounted(() => clearTimeout(pollTimer));
   overflow-wrap: anywhere;
 }
 
-/* Коментарі з Trello часто містять довгі посилання — вони мають переноситись
+/* Коментарі з таск-трекера часто містять довгі посилання — вони мають переноситись
    усередині картки, а не розтягувати сторінку. */
 .task-comment {
   margin-top: 4px;

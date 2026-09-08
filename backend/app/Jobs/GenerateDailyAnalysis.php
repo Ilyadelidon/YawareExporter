@@ -6,6 +6,7 @@ use App\Models\DailyAnalysis;
 use App\Models\Report;
 use App\Services\Ai\EmployeeMemoryService;
 use App\Services\AiAnalysisService;
+use App\Services\ViolationAlertService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Log;
@@ -38,8 +39,11 @@ class GenerateDailyAnalysis implements ShouldQueue
         $this->onQueue(self::QUEUE);
     }
 
-    public function handle(AiAnalysisService $service, EmployeeMemoryService $memory): void
-    {
+    public function handle(
+        AiAnalysisService $service,
+        EmployeeMemoryService $memory,
+        ViolationAlertService $alerts,
+    ): void {
         $report = $this->report->fresh('employee');
 
         if (! $report || ! $report->employee || ! $service->isConfigured($this->provider)) {
@@ -85,6 +89,14 @@ class GenerateDailyAnalysis implements ShouldQueue
             );
         } catch (Throwable $exception) {
             Log::warning("Пам'ять AI для звіту #{$report->id} не оновлено: {$exception->getMessage()}");
+        }
+
+        // Лист керівнику — останнім кроком і теж без права завалити джобу:
+        // мертвий SMTP не повинен позначати готовий розбір як невдалий.
+        try {
+            $alerts->notify($analysis);
+        } catch (Throwable $exception) {
+            Log::warning("Сповіщення про порушення за звітом #{$report->id} не надіслано: {$exception->getMessage()}");
         }
     }
 

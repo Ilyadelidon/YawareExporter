@@ -5,12 +5,11 @@ namespace App\Jobs;
 use App\Models\Report;
 use App\Models\ReportFile;
 use App\Services\AiAnalysisService;
-use App\Services\GoogleSheetsService;
 use App\Services\ReportHistoryService;
+use App\Services\ReportSheetPublisher;
+use App\Services\Tasks\TaskProviders;
 use App\Services\TelegramService;
-use App\Services\TrelloService;
 use App\Support\WorkerEnvironment;
-use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\File;
@@ -59,7 +58,7 @@ class GenerateYawareReport implements ShouldQueue
         $loginEmail = $report->employee->email;
         $loginPassword = $report->employee->yaware_password;
 
-        [$trelloTasks, $trelloWarning] = $this->fetchTrelloTasks($report);
+        [$tasks, $tasksWarning] = $this->fetchTasks($report);
 
         $process = new Process(
             [config('yaware.node_binary'), config('yaware.worker_script')],
@@ -72,7 +71,9 @@ class GenerateYawareReport implements ShouldQueue
                 'YAWARE_TARGET_EMAIL' => $report->employee->email,
                 'YAWARE_DOWNLOAD_DIR' => $outputDirectory,
                 'YAWARE_HEADLESS' => config('yaware.headless') ? 'true' : 'false',
-                'YAWARE_TRELLO_TASKS' => json_encode($this->workerTasks($trelloTasks ?? []), JSON_UNESCAPED_UNICODE),
+                // Історична назва змінної воркера: сюди йдуть таски будь-якого
+                // трекера — форма однакова, і Excel-скрипт про різницю не знає.
+                'YAWARE_TRELLO_TASKS' => json_encode($this->workerTasks($tasks ?? []), JSON_UNESCAPED_UNICODE),
             ],
             null,
             (float) config('yaware.timeout'),
@@ -103,7 +104,7 @@ class GenerateYawareReport implements ShouldQueue
         // День без активності в Yaware (відпустка, лікарняний): в історію і
         // Google Таблицю нічого не пишемо, Telegram мовчить — інакше кожен
         // такий день дає порожню вкладку, нульовий рядок у Табелі і спам
-        // «додайте таски Trello». Excel-файл лишається як підтвердження,
+        // «додайте таски». Excel-файл лишається як підтвердження,
         // що день перевірено.
         if ($this->isEmptyDay($history)) {
             app(ReportHistoryService::class)->forgetDay($report);
@@ -111,7 +112,7 @@ class GenerateYawareReport implements ShouldQueue
             $report->update([
                 'status' => Report::STATUS_COMPLETED,
                 'summary' => ['Результат' => 'День без активності в Yaware — історія і Google Таблиця не оновлювались.'],
-                'trello_tasks' => $trelloTasks,
+                'tasks' => $tasks,
                 'generated_at' => now(),
             ]);
 
@@ -124,14 +125,14 @@ class GenerateYawareReport implements ShouldQueue
             $result['warnings'][] = $historyWarning;
         }
 
-        [$googleSheetUrl, $googleWarnings] = $this->uploadToGoogleSheets($report, $result['file']);
+        [$googleSheetUrl, $googleWarnings] = app(ReportSheetPublisher::class)->publish($report, $result['file']);
 
         if ($googleSheetUrl) {
             $summary = ($summary ?? []) + ['Google Таблиця' => $googleSheetUrl];
         }
 
-        if ($trelloWarning) {
-            $result['warnings'][] = $trelloWarning;
+        if ($tasksWarning) {
+            $result['warnings'][] = $tasksWarning;
         }
 
         foreach ($googleWarnings as $googleWarning) {
@@ -146,12 +147,13 @@ class GenerateYawareReport implements ShouldQueue
             'status' => Report::STATUS_COMPLETED,
             'summary' => $summary,
             // Знімок тасок на момент генерації — готовий звіт показує їх незалежно
-            // від дошки, вибраної пізніше; null = знімка немає (Trello був недоступний).
-            'trello_tasks' => $trelloTasks,
+            // від того, що змінилося в трекері пізніше; null = знімка немає
+            // (таск-трекер був недоступний).
+            'tasks' => $tasks,
             'generated_at' => now(),
         ]);
 
-        $this->notifySuccess($report, $trelloTasks, $googleSheetUrl);
+        $this->notifySuccess($report, $tasks, $googleSheetUrl);
 
         // AI-розбір дня для адміністратора — окремою джобою в черзі analysis,
         // щоб довгий запит до моделі не тримав чергу звітів і не зривав
@@ -162,10 +164,10 @@ class GenerateYawareReport implements ShouldQueue
     }
 
     /**
-     * Telegram-сповіщення працівнику про готовий звіт; якщо тасок у Trello за
+     * Telegram-сповіщення працівнику про готовий звіт; якщо тасок у трекері за
      * день немає — просить заповнити їх і перегенерувати звіт.
      */
-    private function notifySuccess(Report $report, ?array $trelloTasks, ?string $googleSheetUrl): void
+    private function notifySuccess(Report $report, ?array $tasks, ?string $googleSheetUrl): void
     {
         $lines = ["✅ Звіт за {$report->report_date->format('d.m.Y')} згенеровано."];
 
@@ -173,8 +175,9 @@ class GenerateYawareReport implements ShouldQueue
             $lines[] = 'Вкладка у <a href="'.e($googleSheetUrl).'">Google Таблиці</a>.';
         }
 
-        if (empty($trelloTasks)) {
-            $lines[] = '⚠️ Тасок у Trello за цей день немає. Зайдіть на дошку, додайте виконані таски з часом (Start/Due) і перегенеруйте звіт на '.config('app.url').', щоб вони потрапили у звіт.';
+        if (empty($tasks)) {
+            $tracker = TaskProviders::forUser($report->employee?->user)->providerLabel();
+            $lines[] = "⚠️ Тасок у {$tracker} за цей день немає. Додайте виконані таски з проставленим часом початку й завершення і перегенеруйте звіт на ".config('app.url').', щоб вони потрапили у звіт.';
         }
 
         app(TelegramService::class)->notify($report->employee?->user, implode("\n", $lines), 'HTML');
@@ -191,32 +194,34 @@ class GenerateYawareReport implements ShouldQueue
     }
 
     /**
-     * Таски Trello за дату звіту — повний формат для знімка у звіті.
-     * null замість масиву = таски не отримано (Trello не налаштовано або помилка);
-     * помилка Trello не блокує генерацію звіту — лише додає попередження.
+     * Таски за дату звіту з трекера, вибраного працівником (Trello або Бітрікс24),
+     * — повний формат для знімка у звіті. null замість масиву = таски не отримано
+     * (трекер не налаштовано або помилка); помилка трекера не блокує генерацію
+     * звіту — лише додає попередження.
      *
      * @return array{0: ?array<int, array<string, mixed>>, 1: ?string}
      */
-    private function fetchTrelloTasks(Report $report): array
+    private function fetchTasks(Report $report): array
     {
-        // Trello-акаунт користувача, за яким закріплений працівник звіту; fallback на .env.
-        $trello = TrelloService::forUser($report->employee?->user);
+        // Трекер користувача, за яким закріплений працівник звіту.
+        $provider = TaskProviders::forUser($report->employee?->user);
 
-        if (! $trello->isConfigured()) {
+        if (! $provider->isConfigured()) {
             return [null, null];
         }
 
         try {
-            return [$trello->tasksForDate($report->report_date->format('Y-m-d')), null];
+            return [$provider->tasksForDate($report->report_date->format('Y-m-d')), null];
         } catch (Throwable $exception) {
-            Log::warning("Trello-таски для звіту #{$report->id} не отримано: {$exception->getMessage()}");
+            Log::warning("Таски {$provider->providerLabel()} для звіту #{$report->id} не отримано: {$exception->getMessage()}");
 
-            return [null, 'таски Trello не отримано — звіт згенеровано без розподілу часу по тасках.'];
+            return [null, "таски {$provider->providerLabel()} не отримано — звіт згенеровано без розподілу часу по тасках."];
         }
     }
 
     /**
      * Спрощений формат тасок для Excel-воркера (колонка «Завдання» і табличка тасок).
+     * Форма однакова для обох трекерів, тож воркер про різницю не знає.
      *
      * @return array<int, array<string, ?string>>
      */
@@ -291,44 +296,6 @@ class GenerateYawareReport implements ShouldQueue
             Log::warning("Історичні дані звіту #{$report->id} не збережено: {$exception->getMessage()}");
 
             return 'день не збережено в історичну БД: '.mb_substr($exception->getMessage(), 0, 300);
-        }
-    }
-
-    /**
-     * Вивантажує згенерований Excel вкладкою в Google Таблицю і розносить
-     * таски по місячному аркушу. Помилки не блокують звіт — лише додають
-     * попередження.
-     *
-     * @return array{0: ?string, 1: array<int, string>} [URL вкладки, попередження]
-     */
-    private function uploadToGoogleSheets(Report $report, string $filePath): array
-    {
-        // Персональна таблиця користувача, за яким закріплений працівник звіту.
-        $sheets = GoogleSheetsService::forUser($report->employee?->user);
-
-        if (! $sheets->isConfigured()) {
-            return [null, ['Google Таблицю не підключено (авторизація на /google/auth + персональна таблиця на сторінці «Інтеграції») — звіт не вивантажено.']];
-        }
-
-        $dayTitle = $report->report_date->format('d.m.Y');
-        $reportDate = CarbonImmutable::parse($report->report_date->toDateString());
-
-        try {
-            $url = $sheets->uploadReportSheet($filePath, $dayTitle, $reportDate);
-        } catch (Throwable $exception) {
-            Log::warning("Звіт #{$report->id} не вивантажено в Google Таблицю: {$exception->getMessage()}");
-
-            return [null, ['звіт не вивантажено в Google Таблицю: '.mb_substr($exception->getMessage(), 0, 300)]];
-        }
-
-        try {
-            $sheets->syncMonthSheet($dayTitle, $reportDate);
-
-            return [$url, []];
-        } catch (Throwable $exception) {
-            Log::warning("Таски звіту #{$report->id} не рознесено по місячному аркушу: {$exception->getMessage()}");
-
-            return [$url, ['таски не записано в аркуш «Звіт за місяць»: '.mb_substr($exception->getMessage(), 0, 300)]];
         }
     }
 

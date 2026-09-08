@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\Ai\AnalysisPrompt;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -17,6 +18,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
     'output_tokens',
     'error_message',
     'generated_at',
+    'alerted_at',
 ])]
 class DailyAnalysis extends Model
 {
@@ -34,7 +36,28 @@ class DailyAnalysis extends Model
             'date' => 'date:Y-m-d',
             'result' => 'array',
             'generated_at' => 'datetime',
+            'alerted_at' => 'datetime',
         ];
+    }
+
+    /**
+     * Критичні порушення дня — те, через що керівнику йде лист.
+     *
+     * @return list<array<string, string>>
+     */
+    public function criticalViolations(): array
+    {
+        $violations = $this->result['violations'] ?? [];
+
+        if (! is_array($violations)) {
+            return [];
+        }
+
+        return array_values(array_filter(
+            $violations,
+            fn ($violation) => is_array($violation)
+                && ($violation['severity'] ?? null) === AnalysisPrompt::SEVERITY_CRITICAL,
+        ));
     }
 
     public function employee(): BelongsTo

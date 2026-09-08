@@ -3,13 +3,14 @@
 namespace App\Services;
 
 use App\Models\User;
+use App\Services\Tasks\TaskProvider;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
 
-class TrelloService
+class TrelloService implements TaskProvider
 {
     private const API_BASE = 'https://api.trello.com/1';
 
@@ -37,6 +38,16 @@ class TrelloService
     public static function withToken(string $token): self
     {
         return new self($token);
+    }
+
+    public function providerKey(): string
+    {
+        return User::TASK_PROVIDER_TRELLO;
+    }
+
+    public function providerLabel(): string
+    {
+        return 'Trello';
     }
 
     public function isConfigured(): bool

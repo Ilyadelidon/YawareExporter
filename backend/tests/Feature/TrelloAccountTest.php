@@ -190,7 +190,7 @@ class TrelloAccountTest extends TestCase
 
         Sanctum::actingAs($this->connectedUser());
 
-        $this->getJson('/api/trello/tasks?date=2026-07-10')
+        $this->getJson('/api/tasks?date=2026-07-10')
             ->assertOk()
             ->assertJsonPath('data.0.name', 'Таска дня');
 
@@ -202,14 +202,14 @@ class TrelloAccountTest extends TestCase
     {
         Sanctum::actingAs(User::factory()->create());
 
-        $this->getJson('/api/trello/tasks?date=2026-07-10')
+        $this->getJson('/api/tasks?date=2026-07-10')
             ->assertStatus(503)
             ->assertJsonPath('not_connected', true);
 
         Http::assertNothingSent();
     }
 
-    public function test_completed_report_exposes_trello_tasks_snapshot(): void
+    public function test_completed_report_exposes_tasks_snapshot(): void
     {
         $user = User::factory()->create();
         $employee = Employee::create([
@@ -227,7 +227,7 @@ class TrelloAccountTest extends TestCase
             'employee_id' => $employee->id,
             'report_date' => '2026-07-10',
             'status' => Report::STATUS_COMPLETED,
-            'trello_tasks' => $snapshot,
+            'tasks' => $snapshot,
         ]);
 
         Sanctum::actingAs($user);
@@ -235,11 +235,11 @@ class TrelloAccountTest extends TestCase
         // Знімок доступний і в списку (його читає сторінка звіту), і в show.
         $this->getJson('/api/reports?date_from=2026-07-10&date_to=2026-07-10')
             ->assertOk()
-            ->assertJsonPath('data.0.trello_tasks.0.name', 'Таска зі знімка');
+            ->assertJsonPath('data.0.tasks.0.name', 'Таска зі знімка');
 
         $this->getJson("/api/reports/{$report->id}")
             ->assertOk()
-            ->assertJsonPath('data.trello_tasks.0.name', 'Таска зі знімка');
+            ->assertJsonPath('data.tasks.0.name', 'Таска зі знімка');
     }
 
     public function test_status_reports_connection_and_api_key(): void

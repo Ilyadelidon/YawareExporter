@@ -92,7 +92,7 @@ class TelegramController extends Controller
 
         $telegram->sendMessage(
             (string) $chatId,
-            "✅ Telegram підключено до акаунта «{$user->name}». Сюди приходитимуть сповіщення про згенеровані звіти і незаповнені таски Trello.",
+            "✅ Telegram підключено до акаунта «{$user->name}». Сюди приходитимуть сповіщення про згенеровані звіти і незаповнені таски.",
         );
     }
 }

@@ -11,6 +11,9 @@ use RuntimeException;
  */
 class AnalysisPrompt
 {
+    /** Рівень порушення, за яким керівнику йде лист (див. ViolationAlertService). */
+    public const SEVERITY_CRITICAL = 'critical';
+
     /**
      * @param  bool  $webSearch  Чи має провайдер серверний пошук: без нього
      *                           модель не має права здогадуватись про домени.
@@ -26,7 +29,7 @@ class AnalysisPrompt
         return <<<PROMPT
         Ти — аналітик робочого часу невеликої команди. На вхід отримуєш дані одного
         робочого дня одного працівника з тайм-трекера Yaware: його посаду, таски з
-        Trello за цей день і перелік активностей (сайти та застосунки з часом).
+        таск-трекера за цей день і перелік активностей (сайти та застосунки з часом).
 
         Що важливо розуміти про дані:
         - «Активність» — це домен сайту (github.com) або назва застосунку (Telegram),
@@ -53,6 +56,29 @@ class AnalysisPrompt
            показові. Пріоритет — те, на що пішов помітний час. Знайому з memory
            активність усе одно виводь у список, якщо на неї пішов помітний час
            цього дня, — керівник має бачити повну картину дня.
+        4. Окремо зібрати порушення у violations. Порушення — це не «щось не
+           сподобалось», а факт, який керівник має з працівником проговорити.
+
+        Про violations і рівень severity:
+        - "critical" став лише тоді, коли факт очевидний із даних і його справді
+          треба зʼясувати того ж дня. Орієнтири:
+          • сумарно від 30 хвилин дня на явно неробочі активності (розваги,
+            ігри, стрімінг, соцмережі не за посадою);
+          • ознаки роботи на сторону — сайти вакансій, фріланс-біржі, чужі
+            CRM/адмінки (крім випадку, коли це і є посада людини);
+          • жодна таска дня не підтверджується активностями, і при цьому день
+            не заповнений іншою видимою роботою;
+          • спізнення або ранній вихід від 30 хвилин (lateness_seconds,
+            left_early_seconds), а також помітно менший за норму робочий час.
+        - "minor" — усе, що варто згадати, але не тягне на розмову того ж дня:
+          короткі відволікання, разові дрібниці, слабке підтвердження однієї таски.
+        - Немає порушень — поверни порожній масив. Порожній violations це
+          нормальний результат, не вигадуй порушення заради заповнення поля.
+        - Не став "critical" за здогадкою: якщо активність тобі невідома
+          (verdict "unknown"), це щонайбільше "minor" — з формулюванням, що саме
+          лишилось нез'ясованим.
+        - У question напиши одне коротке питання, яке керівник поставить
+          працівнику, щоб зʼясувати причину. Питання, а не докір.
 
         Тон: спокійний і фактичний. Це матеріал для керівника, а не звинувачення.
         Пиши українською. Спирайся тільки на надані дані — не додумуй мотиви людини.
@@ -129,6 +155,37 @@ class AnalysisPrompt
                         'additionalProperties' => false,
                     ],
                 ],
+                'violations' => [
+                    'type' => 'array',
+                    'description' => 'Порушення дня. Критичні з них ідуть керівнику на пошту, тому severity "critical" — лише для очевидних із даних фактів. Порожній масив, якщо порушень немає.',
+                    'items' => [
+                        'type' => 'object',
+                        'properties' => [
+                            'type' => [
+                                'type' => 'string',
+                                'enum' => ['personal_time', 'no_task_evidence', 'schedule', 'side_work', 'other'],
+                            ],
+                            'severity' => [
+                                'type' => 'string',
+                                'enum' => ['critical', 'minor'],
+                            ],
+                            'details' => [
+                                'type' => 'string',
+                                'description' => 'Що саме сталося, з цифрами: скільки часу, на що.',
+                            ],
+                            'evidence' => [
+                                'type' => 'string',
+                                'description' => 'На яких активностях або показниках дня це ґрунтується.',
+                            ],
+                            'question' => [
+                                'type' => 'string',
+                                'description' => 'Коротке питання працівнику, щоб зʼясувати причину.',
+                            ],
+                        ],
+                        'required' => ['type', 'severity', 'details', 'evidence', 'question'],
+                        'additionalProperties' => false,
+                    ],
+                ],
                 'recommendations' => [
                     'type' => 'array',
                     'description' => 'Конкретні поради працівникові. Порожній масив, якщо порад немає.',
@@ -140,6 +197,7 @@ class AnalysisPrompt
                 'focus_assessment',
                 'task_coverage',
                 'unclear_activities',
+                'violations',
                 'recommendations',
             ],
             'additionalProperties' => false,
@@ -178,11 +236,43 @@ class AnalysisPrompt
                     'reasoning' => '',
                 ]),
             ),
+            'violations' => self::violations($decoded['violations'] ?? []),
             'recommendations' => array_values(array_filter(
                 (array) ($decoded['recommendations'] ?? []),
                 'is_string',
             )),
         ];
+    }
+
+    /**
+     * Порушення з відповіді моделі. Рівень і тип звіряємо зі списком: за
+     * severity ідуть листи керівнику, тож несподіване значення тут краще
+     * опустити до "minor", ніж розіслати пошту через одруківку моделі.
+     *
+     * @param  mixed  $items
+     * @return list<array<string, string>>
+     */
+    private static function violations($items): array
+    {
+        $normalised = self::objects($items, [
+            'type' => 'other',
+            'severity' => 'minor',
+            'details' => '',
+            'evidence' => '',
+            'question' => '',
+        ]);
+
+        $types = ['personal_time', 'no_task_evidence', 'schedule', 'side_work', 'other'];
+
+        return array_values(array_filter(array_map(fn (array $item) => [
+            'type' => in_array($item['type'], $types, true) ? $item['type'] : 'other',
+            'severity' => $item['severity'] === self::SEVERITY_CRITICAL
+                ? self::SEVERITY_CRITICAL
+                : 'minor',
+            'details' => is_string($item['details']) ? $item['details'] : '',
+            'evidence' => is_string($item['evidence']) ? $item['evidence'] : '',
+            'question' => is_string($item['question']) ? $item['question'] : '',
+        ], $normalised), fn (array $item) => $item['details'] !== ''));
     }
 
     /**

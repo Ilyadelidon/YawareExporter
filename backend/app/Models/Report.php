@@ -7,7 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-#[Fillable(['employee_id', 'report_date', 'status', 'summary', 'trello_tasks', 'error_message', 'generated_at'])]
+#[Fillable(['employee_id', 'report_date', 'status', 'summary', 'tasks', 'error_message', 'generated_at'])]
 class Report extends Model
 {
     public const STATUS_PENDING = 'pending';
@@ -23,7 +23,7 @@ class Report extends Model
         return [
             'report_date' => 'date:Y-m-d',
             'summary' => 'array',
-            'trello_tasks' => 'array',
+            'tasks' => 'array',
             'generated_at' => 'datetime',
         ];
     }

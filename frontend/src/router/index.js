@@ -35,6 +35,12 @@ const routes = [
         component: () => import('../views/EmployeesView.vue'),
         meta: { adminOnly: true },
       },
+      {
+        path: 'settings',
+        name: 'settings',
+        component: () => import('../views/SettingsView.vue'),
+        meta: { adminOnly: true },
+      },
     ],
   },
   {
