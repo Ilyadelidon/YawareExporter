@@ -134,16 +134,18 @@ class OpsHealthcheckTest extends TestCase
         $this->assertStringContainsString('Свіжого бекапу бази немає', $this->alerts()[0]);
     }
 
-    public function test_backup_without_a_copy_off_the_server_is_reported(): void
+    public function test_backup_kept_only_on_this_server_stays_quiet(): void
     {
         Http::fake();
+        // Копія поза VPS поки не робиться, і монітор про це мовчить свідомо —
+        // див. коментар у OpsMonitor::staleBackup().
         $this->backupMarker('2026-07-20 06:00', remote: false);
         $this->travelTo(CarbonImmutable::parse('2026-07-20 09:00', 'Europe/Kyiv'));
         app(OpsMonitor::class)->recordDailyRun();
 
         $this->artisan('ops:healthcheck')->assertSuccessful();
 
-        $this->assertStringContainsString('лишається на цьому ж сервері', $this->alerts()[0]);
+        Http::assertNothingSent();
     }
 
     public function test_missed_morning_run_raises_alarm(): void
