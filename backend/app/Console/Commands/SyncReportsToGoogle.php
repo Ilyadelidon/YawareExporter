@@ -36,6 +36,15 @@ class SyncReportsToGoogle extends Command
 
         foreach ($reports as $report) {
             $label = "Звіт #{$report->id} за {$report->report_date->format('d.m.Y')}";
+
+            // Явно вказаний день без тасок: вивантажувати нема чого, і це не
+            // помилка — інакше команда завершувалась би невдачею на пропуску.
+            if (ReportSheetPublisher::hasNoTasks($report)) {
+                $this->info("{$label}: тасок за день немає — вивантаження не потрібне.");
+
+                continue;
+            }
+
             $excelPath = $this->excelPath($report);
 
             if (! $excelPath) {

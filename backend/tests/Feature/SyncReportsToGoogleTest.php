@@ -6,6 +6,7 @@ use App\Models\Employee;
 use App\Models\Report;
 use App\Models\ReportFile;
 use App\Models\User;
+use App\Services\ReportSheetPublisher;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Cache;
@@ -131,6 +132,36 @@ class SyncReportsToGoogleTest extends TestCase
         $this->assertStringEndsWith('#gid='.self::COPIED_SHEET_ID, $summary['Google Таблиця']);
         // Попередження про невдале вивантаження зникає, решта лишається.
         $this->assertSame('офлайн активності за обрану дату відсутні.', $summary['Попередження']);
+    }
+
+    public function test_day_without_tasks_is_not_uploaded(): void
+    {
+        $report = $this->reportWithFailedUpload();
+        $report->update(['tasks' => []]);
+        Http::fake();
+
+        $this->artisan('reports:sync-google', ['report' => [$report->id]])
+            ->expectsOutputToContain('тасок за день немає')
+            ->assertSuccessful();
+
+        Http::assertNothingSent();
+    }
+
+    /**
+     * Пропуск дня без тасок не має виглядати як невдале вивантаження — інакше
+     * монітор повідомить про інцидент, а команда доливу щодня його чіпатиме.
+     */
+    public function test_skipped_day_is_not_reported_as_failed_upload(): void
+    {
+        $report = $this->reportWithFailedUpload();
+        $report->tasks = [];
+        Http::fake();
+
+        [$url, $warnings] = app(ReportSheetPublisher::class)->publish($report, 'unused.xlsx');
+
+        $this->assertNull($url);
+        $this->assertStringNotContainsString(ReportSheetPublisher::FAILED_MARKER, implode("\n", $warnings));
+        Http::assertNothingSent();
     }
 
     public function test_report_already_in_the_sheet_is_not_touched(): void

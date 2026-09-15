@@ -125,6 +125,10 @@ class GenerateYawareReport implements ShouldQueue
             $result['warnings'][] = $historyWarning;
         }
 
+        // Знімок тасок потрібен публікатору ще до збереження звіту: день, у
+        // якому тасок немає взагалі, в Google Таблицю не вивантажується.
+        $report->tasks = $tasks;
+
         [$googleSheetUrl, $googleWarnings] = app(ReportSheetPublisher::class)->publish($report, $result['file']);
 
         if ($googleSheetUrl) {
