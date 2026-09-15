@@ -1,0 +1,5 @@
+# Скрипти й конфіги для Linux-сервера копіюються на прод як є (scp з Windows),
+# тому в робочій копії вони мусять лишатись з LF: CRLF у shebang ламає запуск
+# (bash: cannot execute: required file not found), а в конфізі logrotate — розбір.
+*.sh text eol=lf
+ops/logrotate-teamreporter text eol=lf
