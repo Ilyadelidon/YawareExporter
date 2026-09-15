@@ -1751,6 +1751,11 @@ report_date_iso = os.environ.get('REPORT_DATE_ISO', '')
 # Пауза між сусідніми рядками активності, більша за цей поріг, розриває блок таски
 # (наприклад, обідня перерва) — як у ручних звітах.
 task_gap_split = int(os.environ.get('TASK_GAP_SPLIT_MINUTES') or '15') / 1440.0
+# Хвіст активності після due, який ще зараховується тасці: due рідко ставлять посекундно.
+task_due_grace = int(os.environ.get('TASK_DUE_GRACE_MINUTES') or '15') / 1440.0
+# Короткий залишок поза тасками (перемикання, пауза між тасками) не вартий окремого
+# рядка — його дописуємо до попередньої таски. Більший лишається «Поза тасками».
+task_outside_merge = int(os.environ.get('TASK_OUTSIDE_MERGE_MINUTES') or '15') / 1440.0
 
 def column_letter(index):
     index += 1
@@ -1770,6 +1775,69 @@ def column_index(column_name):
     for char in column_name:
         value = value * 26 + (ord(char.upper()) - 64)
     return value - 1
+
+# Ширина колонки за замовчуванням у Excel — 8.43 символи.
+DEFAULT_COLUMN_WIDTH = 8.43
+
+def get_column_width(worksheet_root, target_column_index):
+    column_number = target_column_index + 1
+    cols = worksheet_root.find(f'{{{MAIN_NS}}}cols')
+    if cols is not None:
+        for col in cols.findall(f'{{{MAIN_NS}}}col'):
+            minimum = int(col.attrib.get('min', '1'))
+            maximum = int(col.attrib.get('max', minimum))
+            if minimum <= column_number <= maximum and col.attrib.get('width'):
+                return float(col.attrib['width'])
+    sheet_format = worksheet_root.find(f'{{{MAIN_NS}}}sheetFormatPr')
+    if sheet_format is not None and sheet_format.attrib.get('defaultColWidth'):
+        return float(sheet_format.attrib['defaultColWidth'])
+    return DEFAULT_COLUMN_WIDTH
+
+def set_column_width(worksheet_root, target_column_index, width):
+    column_number = target_column_index + 1
+    cols = worksheet_root.find(f'{{{MAIN_NS}}}cols')
+    if cols is None:
+        # <cols> за схемою стоїть між sheetFormatPr і sheetData.
+        cols = ET.Element(f'{{{MAIN_NS}}}cols')
+        sheet_data_element = worksheet_root.find(f'{{{MAIN_NS}}}sheetData')
+        worksheet_root.insert(list(worksheet_root).index(sheet_data_element), cols)
+
+    target_col = None
+    for col in list(cols.findall(f'{{{MAIN_NS}}}col')):
+        minimum = int(col.attrib.get('min', '1'))
+        maximum = int(col.attrib.get('max', minimum))
+        if not minimum <= column_number <= maximum:
+            continue
+        if minimum == maximum:
+            target_col = col
+            break
+        # Діапазон, що накриває нашу колонку, розрізаємо — сусіди лишаються як були.
+        template = dict(col.attrib)
+        cols.remove(col)
+        if minimum < column_number:
+            left = ET.SubElement(cols, f'{{{MAIN_NS}}}col', dict(template))
+            left.attrib['min'] = str(minimum)
+            left.attrib['max'] = str(column_number - 1)
+        target_col = ET.SubElement(cols, f'{{{MAIN_NS}}}col', dict(template))
+        target_col.attrib['min'] = str(column_number)
+        target_col.attrib['max'] = str(column_number)
+        if column_number < maximum:
+            right = ET.SubElement(cols, f'{{{MAIN_NS}}}col', dict(template))
+            right.attrib['min'] = str(column_number + 1)
+            right.attrib['max'] = str(maximum)
+        break
+
+    if target_col is None:
+        target_col = ET.SubElement(cols, f'{{{MAIN_NS}}}col', {'min': str(column_number), 'max': str(column_number)})
+
+    target_col.attrib['width'] = f'{width:.2f}'
+    target_col.attrib['customWidth'] = '1'
+
+    ordered = sorted(cols.findall(f'{{{MAIN_NS}}}col'), key=lambda item: int(item.attrib.get('min', '1')))
+    for col in ordered:
+        cols.remove(col)
+    for col in ordered:
+        cols.append(col)
 
 def cell_sort_key(cell):
     column_name, row_number = split_cell_reference(cell.attrib.get('r', 'A1'))
@@ -2294,6 +2362,10 @@ with tempfile.TemporaryDirectory() as temp_directory:
                     cell.attrib['s'] = str(style_id)
                     break
 
+    # Коментар до таски — довгий текст, тож його колонка вдвічі ширша за звичайну.
+    comment_column_index = task_table_start_column_index + 2
+    set_column_width(worksheet_root, comment_column_index, get_column_width(worksheet_root, comment_column_index) * 2)
+
     # --- Розподіл шкали часу по тасках Trello (колонка I) + табличка тасок ---
     if trello_tasks and primary_row_count >= 2:
         tasks = []
@@ -2301,12 +2373,53 @@ with tempfile.TemporaryDirectory() as temp_directory:
             tasks.append({
                 'name': str(task_data.get('name', '')),
                 'comment': str(task_data.get('comment', '')),
-                'start': trello_time_fraction(task_data.get('start'), report_date_iso, 0.0),
+                'start': trello_time_fraction(task_data.get('start'), report_date_iso, None),
+                'due': trello_time_fraction(task_data.get('due'), report_date_iso, None),
                 'duration': 0.0,
             })
-        tasks.sort(key=lambda task: task['start'])
+        tasks.sort(key=lambda task: task['start'] if task['start'] is not None else (task['due'] if task['due'] is not None else 0.0))
 
-        # Кожен рядок активності належить тасці з найпізнішим start <= G рядка.
+        # Невідому межу добудовуємо із сусідньої таски: інакше таска без start або due
+        # поглинула б увесь день. Спершу start (зліва направо), потім due.
+        for index, task in enumerate(tasks):
+            if task['start'] is not None:
+                continue
+            previous = tasks[index - 1] if index > 0 else None
+            if previous is None:
+                task['start'] = 0.0
+            elif previous['due'] is not None:
+                task['start'] = previous['due']
+            else:
+                task['start'] = previous['start']
+
+        for index, task in enumerate(tasks):
+            if task['due'] is None:
+                following = tasks[index + 1] if index + 1 < len(tasks) else None
+                task['due'] = following['start'] if following is not None else task['start']
+            task['due'] = max(task['due'], task['start'])
+
+        # Вікно таски — [start, due] плюс grace на хвіст роботи (due рідко ставлять
+        # посекундно). Grace не залазить у наступну таску.
+        for index, task in enumerate(tasks):
+            following = tasks[index + 1] if index + 1 < len(tasks) else None
+            next_start = following['start'] if following is not None else 1.0
+            task['window_end'] = min(task['due'] + task_due_grace, max(next_start, task['due']))
+
+        def row_owner_index(row_start, row_end):
+            # Рядок активності належить тасці з найбільшим перекриттям; якщо він не
+            # потрапляє в жодне вікно — це час поза тасками (-1).
+            best_index = -1
+            best_overlap = 0.0
+            for index, task in enumerate(tasks):
+                if row_end > row_start:
+                    overlap = min(row_end, task['window_end']) - max(row_start, task['start'])
+                else:
+                    overlap = 1.0 if task['start'] <= row_start <= task['window_end'] else 0.0
+                if overlap > best_overlap:
+                    best_index = index
+                    best_overlap = overlap
+            return best_index
+
         rows_info = []
         for row_number in range(2, primary_row_count + 1):
             row_element = ensure_row(sheet_data, row_number)
@@ -2316,13 +2429,7 @@ with tempfile.TemporaryDirectory() as temp_directory:
             row_end = get_numeric_cell_value(row_element, f'H{row_number}')
             if row_end is None or row_end < row_start:
                 row_end = row_start
-            task_index = 0
-            for index, task in enumerate(tasks):
-                if task['start'] <= row_start:
-                    task_index = index
-                else:
-                    break
-            rows_info.append((row_number, row_start, row_end, task_index))
+            rows_info.append((row_number, row_start, row_end, row_owner_index(row_start, row_end)))
 
         segments = []
         for row_number, row_start, row_end, task_index in rows_info:
@@ -2344,15 +2451,66 @@ with tempfile.TemporaryDirectory() as temp_directory:
                     'end': row_end,
                 })
 
+        # Додаткова перевірка залишку поза тасками: короткий блок (до
+        # task_outside_merge) дописуємо до попередньої таски, інакше табличка
+        # обростає хвилинними рядками «Поза тасками». Якщо попередньої таски ще
+        # не було — беремо найближчу наступну; довгий блок лишається окремо.
+        for segment in segments:
+            segment['owner_index'] = segment['task_index']
+            segment['absorbed'] = False
+
+        for segment_index, segment in enumerate(segments):
+            if segment['task_index'] >= 0:
+                continue
+            if segment['end'] - segment['start'] > task_outside_merge:
+                continue
+            owner_index = -1
+            for previous in reversed(segments[:segment_index]):
+                if previous['owner_index'] >= 0:
+                    owner_index = previous['owner_index']
+                    break
+            if owner_index < 0:
+                for following in segments[segment_index + 1:]:
+                    if following['task_index'] >= 0:
+                        owner_index = following['task_index']
+                        break
+            if owner_index >= 0:
+                segment['owner_index'] = owner_index
+                segment['absorbed'] = True
+
         amber_fill_id = create_solid_fill(styles_root, 'FFFFF2CC')
+        grey_fill_id = create_solid_fill(styles_root, 'FFF2F2F2')
         task_block_plain_style_id = create_border_style(styles_root, num_fmt_code='hh:mm:ss', include_border=False)
         task_block_filled_style_id = create_border_style(styles_root, fill_id=amber_fill_id, num_fmt_code='hh:mm:ss', include_border=False)
+        task_block_outside_style_id = create_border_style(styles_root, fill_id=grey_fill_id, num_fmt_code='hh:mm:ss', include_border=False)
 
+        outside_duration = 0.0
         merge_references = []
         for segment_index, segment in enumerate(segments):
-            block_style_id = task_block_filled_style_id if segment_index % 2 else task_block_plain_style_id
-            block_duration = max(segment['end'] - segment['start'], 0.0)
-            tasks[segment['task_index']]['duration'] += block_duration
+            segment_duration = max(segment['end'] - segment['start'], 0.0)
+            owner_index = segment['owner_index']
+            if owner_index < 0:
+                block_style_id = task_block_outside_style_id
+                block_duration = segment_duration
+                outside_duration += segment_duration
+            else:
+                task = tasks[owner_index]
+                block_style_id = task_block_filled_style_id if segment_index % 2 else task_block_plain_style_id
+                if segment['absorbed']:
+                    # Блок цілком поза вікном таски, але короткий — зараховуємо його
+                    # повністю тій тасці, з якої працівник щойно вийшов.
+                    block_duration = segment_duration
+                else:
+                    # Блок обрізається по вікну таски: довгий рядок активності не має
+                    # витягувати таску за її due.
+                    block_duration = max(min(segment['end'], task['window_end']) - max(segment['start'], task['start']), 0.0)
+                    leftover = max(segment_duration - block_duration, 0.0)
+                    if leftover <= task_outside_merge:
+                        # Хвіст, що виліз за вікно, теж короткий — лишаємо його тасці.
+                        block_duration = segment_duration
+                    else:
+                        outside_duration += leftover
+                task['duration'] += block_duration
 
             first_row_element = ensure_row(sheet_data, segment['first_row'])
             upsert_numeric_cell(first_row_element, f'I{segment["first_row"]}', block_duration, style_id=block_style_id)
@@ -2371,6 +2529,18 @@ with tempfile.TemporaryDirectory() as temp_directory:
             for reference in merge_references:
                 ET.SubElement(merge_cells, f'{{{MAIN_NS}}}mergeCell', {'ref': reference})
             merge_cells.attrib['count'] = str(len(merge_cells))
+
+        # Час, не покритий жодною таскою і завеликий, щоб приклеїтись до сусідньої,
+        # показуємо окремим рядком — щоб «Час разом» лишався рівним активному часу
+        # дня, а не тихо дописувався останній тасці.
+        # Менш як пів секунди — це похибка float від різниць часток доби, а не
+        # робочий час: такий рядок показав би 00:00:00.
+        if outside_duration >= 0.5 / 86400.0:
+            tasks.append({
+                'name': 'Поза тасками',
+                'comment': '',
+                'duration': outside_duration,
+            })
 
         # Табличка тасок: Назва таски / Коментар / Час + рядок «Час разом».
         task_wrapped_text_style_id = create_border_style(styles_root, wrap_text=True)
