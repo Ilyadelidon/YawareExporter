@@ -145,7 +145,7 @@ class OpsMonitor
     private function failedReports(CarbonImmutable $now): ?string
     {
         $failed = Report::where('status', Report::STATUS_FAILED)
-            ->whereDate('updated_at', $now->toDateString())
+            ->whereBetween('updated_at', $this->kyivDayInUtc($now))
             ->with('employee')
             ->get();
 
@@ -190,7 +190,7 @@ class OpsMonitor
     private function stuckReports(CarbonImmutable $now): ?string
     {
         $stuck = Report::where('status', Report::STATUS_PROCESSING)
-            ->where('updated_at', '<', $now->subMinutes(self::STUCK_REPORT_MINUTES))
+            ->where('updated_at', '<', $now->subMinutes(self::STUCK_REPORT_MINUTES)->utc())
             ->count();
 
         return $stuck > 0
@@ -201,7 +201,7 @@ class OpsMonitor
     private function failedAnalyses(CarbonImmutable $now): ?string
     {
         $failed = DailyAnalysis::where('status', DailyAnalysis::STATUS_FAILED)
-            ->whereDate('updated_at', $now->toDateString())
+            ->whereBetween('updated_at', $this->kyivDayInUtc($now))
             ->count();
 
         return $failed > 0
@@ -280,6 +280,18 @@ class OpsMonitor
         return $percent < self::MIN_FREE_DISK_PERCENT
             ? "На диску лишилось {$percent}% вільного місця — звіти скоро перестануть зберігатись."
             : null;
+    }
+
+    /**
+     * Київська доба в межах UTC. Timestamps у базі лежать в UTC (APP_TIMEZONE),
+     * а «сьогодні» для людини — київське; без переведення межі поїхали б на +3
+     * години, і вечірні падіння рахувались би вже завтрашніми.
+     *
+     * @return array{0: CarbonImmutable, 1: CarbonImmutable}
+     */
+    private function kyivDayInUtc(CarbonImmutable $now): array
+    {
+        return [$now->startOfDay()->utc(), $now->endOfDay()->utc()];
     }
 
     /**

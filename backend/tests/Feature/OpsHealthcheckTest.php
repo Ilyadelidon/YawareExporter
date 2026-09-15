@@ -162,6 +162,47 @@ class OpsHealthcheckTest extends TestCase
         $this->assertStringContainsString('зависло в статусі processing', $this->alerts()[0]);
     }
 
+    public function test_report_just_queued_is_not_reported_as_stuck(): void
+    {
+        Http::fake();
+        $this->travelTo(CarbonImmutable::parse('2026-07-20 09:00', 'Europe/Kyiv'));
+        app(OpsMonitor::class)->recordDailyRun();
+
+        // Звіт щойно поставлено в чергу. У базі його updated_at лежить в UTC,
+        // тож поріг «25 хвилин» теж має рахуватись в UTC — інакше кожен свіжий
+        // звіт одразу виглядав би завислим, і ранкова генерація щодня
+        // супроводжувалась би хибною тривогою.
+        Report::create([
+            'employee_id' => $this->employee()->id,
+            'report_date' => '2026-07-19',
+            'status' => Report::STATUS_PROCESSING,
+        ]);
+
+        $this->artisan('ops:healthcheck')->assertSuccessful();
+
+        Http::assertNothingSent();
+    }
+
+    public function test_night_failure_counts_as_today(): void
+    {
+        Http::fake();
+        // 02:00 ночі за Києвом — у базі це вчорашні 23:00 UTC. Якщо шукати
+        // «сьогодні» київською датою по UTC-колонці, таке падіння не потрапить
+        // у жодне сповіщення.
+        $this->travelTo(CarbonImmutable::parse('2026-07-20 02:00', 'Europe/Kyiv'));
+        app(OpsMonitor::class)->recordDailyRun();
+
+        Report::create([
+            'employee_id' => $this->employee()->id,
+            'report_date' => '2026-07-19',
+            'status' => Report::STATUS_FAILED,
+        ]);
+
+        $this->artisan('ops:healthcheck')->assertSuccessful();
+
+        $this->assertStringContainsString('Звітів упало сьогодні: 1', $this->alerts()[0]);
+    }
+
     public function test_stalled_queue_raises_alarm(): void
     {
         Http::fake();
