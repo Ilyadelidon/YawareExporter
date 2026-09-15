@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\BitrixAccount;
 use App\Models\BitrixWorkspace;
 use App\Models\User;
 use App\Services\Tasks\TaskProvider;
@@ -12,10 +13,11 @@ use Illuminate\Support\Facades\Http;
 use RuntimeException;
 
 /**
- * Таски з Бітрікс24 через вхідний вебхук порталу. На відміну від Trello,
- * робоча область одна на команду: вебхук підключає адміністратор, а кожен
- * працівник лише вказує свій акаунт на порталі — його таски й потрапляють
- * у звіт (фільтр за RESPONSIBLE_ID).
+ * Таски з Бітрікс24 від імені самого працівника. Портал один на команду
+ * (адміністратор реєструє на ньому локальний застосунок — [[BitrixWorkspace]]),
+ * але токен у кожного свій: працівник авторизується в Бітріксі особисто, і
+ * REST віддає рівно ті таски, які він і так бачить на порталі. Ставити
+ * фільтр за чужим RESPONSIBLE_ID безглуздо — токен цього не дозволить.
  */
 class BitrixService implements TaskProvider
 {
@@ -44,54 +46,70 @@ class BitrixService implements TaskProvider
     ];
 
     public function __construct(
-        private readonly ?string $webhookUrl = null,
+        private ?BitrixAccount $account = null,
         private readonly ?string $portalUrl = null,
-        private readonly ?string $bitrixUserId = null,
     ) {}
 
     /**
-     * Інстанс у контексті користувача: командний портал + його акаунт на ньому.
+     * Інстанс у контексті працівника: його особистий токен на порталі команди.
      */
     public static function forUser(?User $user): self
     {
         $workspace = BitrixWorkspace::active();
+        $account = $user?->bitrixAccount;
 
-        if (! $workspace) {
-            return new self;
-        }
-
-        return new self($workspace->webhook_url, $workspace->portal_url, $user?->bitrix_user_id);
-    }
-
-    /**
-     * Інстанс командного порталу без прив'язки до працівника — для списку
-     * користувачів порталу і перевірки самої робочої області.
-     */
-    public static function forWorkspace(?BitrixWorkspace $workspace = null): self
-    {
-        $workspace ??= BitrixWorkspace::active();
-
-        return $workspace
-            ? new self($workspace->webhook_url, $workspace->portal_url)
+        return $workspace && $account
+            ? new self($account, $workspace->portal_url)
             : new self;
     }
 
     /**
-     * Інстанс для перевірки щойно введеного вебхука (у БД його ще немає).
+     * Профіль власника щойно виданого токена — ним і визначається, чий це
+     * акаунт. Викликається в OAuth-callback, коли акаунта в БД ще немає.
+     *
+     * @return array{id: ?string, name: string, email: ?string}
      */
-    public static function withWebhook(string $webhookUrl): self
+    public static function profileWithToken(string $clientEndpoint, string $accessToken): array
     {
-        return new self($webhookUrl, self::portalUrlFromWebhook($webhookUrl));
+        $response = Http::timeout(25)->asJson()
+            ->post(rtrim($clientEndpoint, '/').'/profile', ['auth' => $accessToken]);
+
+        $result = (new self)->result($response)['result'] ?? [];
+
+        return [
+            'id' => isset($result['ID']) ? (string) $result['ID'] : null,
+            'name' => self::fullName($result),
+            'email' => $result['EMAIL'] ?? null,
+        ];
     }
 
     /**
-     * Схема + хост із вебхука (https://team.bitrix24.ua/rest/1/код/ → https://team.bitrix24.ua).
+     * Картка користувача порталу: profile віддає лише базові поля і часто без
+     * пошти й імені, а саме пошта впізнавана для працівника в інтерфейсі.
+     * Права на user.get у застосунку може й не бути — тоді порожня картка,
+     * і підключення все одно відбувається.
+     *
+     * @return array{name: ?string, email: ?string}
      */
-    public static function portalUrlFromWebhook(string $webhookUrl): string
+    public static function userCardWithToken(string $clientEndpoint, string $accessToken, string $bitrixUserId): array
     {
-        $parts = parse_url($webhookUrl);
+        $response = Http::timeout(25)->asJson()->post(rtrim($clientEndpoint, '/').'/user.get', [
+            'auth' => $accessToken,
+            'ID' => $bitrixUserId,
+        ]);
 
-        return ($parts['scheme'] ?? 'https').'://'.($parts['host'] ?? '');
+        $result = (new self)->result($response)['result'][0] ?? [];
+
+        return [
+            'name' => self::fullName($result) ?: null,
+            'email' => $result['EMAIL'] ?? null,
+        ];
+    }
+
+    /** Ім'я з полів картки Бітрікса; порожнє, якщо профіль не заповнений. */
+    private static function fullName(array $fields): string
+    {
+        return trim(trim((string) ($fields['NAME'] ?? '')).' '.trim((string) ($fields['LAST_NAME'] ?? '')));
     }
 
     public function providerKey(): string
@@ -104,69 +122,9 @@ class BitrixService implements TaskProvider
         return 'Бітрікс24';
     }
 
-    /** Портал команди підключено (незалежно від того, чи вибрав акаунт цей працівник). */
-    public function hasWorkspace(): bool
-    {
-        return $this->webhookUrl !== null;
-    }
-
     public function isConfigured(): bool
     {
-        return $this->hasWorkspace() && $this->bitrixUserId !== null;
-    }
-
-    /**
-     * Профіль власника вебхука — від його імені йдуть усі запити.
-     * Слугує перевіркою вебхука перед збереженням.
-     */
-    public function profile(): array
-    {
-        $result = $this->call('profile')['result'] ?? [];
-
-        return [
-            'id' => isset($result['ID']) ? (string) $result['ID'] : null,
-            'name' => $this->fullName($result['NAME'] ?? null, $result['LAST_NAME'] ?? null)
-                ?: 'Власник вебхука',
-        ];
-    }
-
-    /**
-     * Активні користувачі порталу — з цього списку працівник обирає свій акаунт.
-     *
-     * @return array<int, array<string, ?string>>
-     */
-    public function users(): array
-    {
-        $users = [];
-        $start = 0;
-
-        for ($page = 0; $page < self::MAX_PAGES; $page++) {
-            $body = $this->call('user.get', ['FILTER' => ['ACTIVE' => true], 'start' => $start]);
-
-            foreach ($body['result'] ?? [] as $portalUser) {
-                $id = (string) ($portalUser['ID'] ?? '');
-
-                if ($id === '') {
-                    continue;
-                }
-
-                $users[] = [
-                    'id' => $id,
-                    'name' => $this->fullName($portalUser['NAME'] ?? null, $portalUser['LAST_NAME'] ?? null)
-                        ?: ($portalUser['EMAIL'] ?? "Користувач #{$id}"),
-                    'email' => $portalUser['EMAIL'] ?? null,
-                    'position' => $portalUser['WORK_POSITION'] ?? null,
-                ];
-            }
-
-            if (! isset($body['next'])) {
-                break;
-            }
-
-            $start = (int) $body['next'];
-        }
-
-        return $users;
+        return $this->account !== null;
     }
 
     /**
@@ -178,8 +136,8 @@ class BitrixService implements TaskProvider
     public function tasksForDate(string $date): array
     {
         if (! $this->isConfigured()) {
-            throw new RuntimeException($this->hasWorkspace()
-                ? 'Бітрікс24: не вибрано ваш акаунт на порталі — зробіть це на сторінці інтеграцій.'
+            throw new RuntimeException(BitrixWorkspace::active()
+                ? 'Бітрікс24 не підключено: авторизуйтесь на порталі команди на сторінці інтеграцій.'
                 : 'Бітрікс24 не підключено: портал команди має підключити адміністратор.');
         }
 
@@ -231,7 +189,7 @@ class BitrixService implements TaskProvider
 
         for ($page = 0; $page < self::MAX_PAGES; $page++) {
             $body = $this->cachedCall('tasks.task.list', [
-                'filter' => $filter + ['RESPONSIBLE_ID' => $this->bitrixUserId],
+                'filter' => $filter + ['RESPONSIBLE_ID' => $this->account->bitrix_user_id],
                 // select у верхньому регістрі, а от у відповіді Бітрікс віддає
                 // ті самі поля в camelCase — звідси різні написання нижче.
                 'select' => [
@@ -295,7 +253,7 @@ class BitrixService implements TaskProvider
             return null;
         }
 
-        $userId = (string) ($responsibleId ?: $this->bitrixUserId);
+        $userId = (string) ($responsibleId ?: $this->account?->bitrix_user_id);
 
         return "{$this->portalUrl}/company/personal/user/{$userId}/tasks/task/view/{$id}/";
     }
@@ -324,33 +282,47 @@ class BitrixService implements TaskProvider
         return $this->parseDate($value)?->setTimezone($timezone)->format('Y-m-d H:i');
     }
 
-    private function fullName(?string $first, ?string $last): string
-    {
-        return trim(trim((string) $first).' '.trim((string) $last));
-    }
-
     /**
      * Той самий кеш на 60 с, що й у Trello: сторінка звіту опитує таски
-     * полінгом, а ліміт запитів порталу жорсткий.
+     * полінгом, а ліміт запитів порталу жорсткий. Ключ включає акаунт —
+     * токени особисті, тож і відповіді в різних працівників різні.
      */
     private function cachedCall(string $method, array $params): array
     {
-        $key = 'bitrix.'.$method.'.'.md5($this->portalUrl.json_encode($params));
+        $key = 'bitrix.'.$method.'.'.md5($this->account->bitrix_user_id.'@'.$this->portalUrl.json_encode($params));
 
         return Cache::remember($key, now()->addSeconds(60), fn () => $this->call($method, $params));
     }
 
+    /**
+     * Виклик REST від імені працівника. Прострочений access_token — робоча
+     * ситуація (він живе годину), тож 401 один раз відпрацьовуємо оновленням
+     * токена, а не помилкою у звіті.
+     */
     private function call(string $method, array $params = []): array
     {
-        if (! $this->webhookUrl) {
-            throw new RuntimeException('Портал Бітрікс24 не підключено.');
+        if (! $this->account) {
+            throw new RuntimeException('Бітрікс24 не підключено.');
         }
 
-        $url = rtrim($this->webhookUrl, '/')."/{$method}";
+        $this->ensureFreshToken();
+
         $attempts = count(self::RETRY_DELAYS_MS) + 1;
+        $refreshed = false;
 
         for ($attempt = 1; $attempt <= $attempts; $attempt++) {
-            $response = Http::timeout(25)->asJson()->post($url, $params);
+            $url = rtrim($this->account->client_endpoint, '/')."/{$method}";
+            $response = Http::timeout(25)->asJson()
+                ->post($url, $params + ['auth' => $this->account->access_token]);
+
+            // Токен міг протухнути раніше строку (наприклад, після зміни прав) —
+            // оновлюємо і повторюємо рівно один раз.
+            if (! $refreshed && $response->status() === 401) {
+                $refreshed = true;
+                $this->refreshToken();
+
+                continue;
+            }
 
             // Ліміт запитів — єдина помилка, яку має сенс перечекати.
             if ($attempt < $attempts && in_array($response->status(), [429, 503], true)) {
@@ -365,9 +337,59 @@ class BitrixService implements TaskProvider
         throw new RuntimeException('Бітрікс24 не відповідає — вичерпано ліміт запитів порталу.');
     }
 
+    private function ensureFreshToken(): void
+    {
+        if ($this->account->needsRefresh()) {
+            $this->refreshToken();
+        }
+    }
+
+    /**
+     * Оновлення токена під локом: звіти всієї команди генеруються паралельно
+     * трьома воркерами, а refresh_token одноразовий — два одночасні оновлення
+     * зробили б доступ недійсним.
+     */
+    private function refreshToken(): void
+    {
+        $lock = Cache::lock("bitrix.refresh.{$this->account->id}", 20);
+
+        $lock->block(15, function () {
+            $this->account->refresh();
+
+            // Поки чекали лок, сусідній процес міг уже все оновити.
+            if (! $this->account->needsRefresh()) {
+                return;
+            }
+
+            $oauth = BitrixOAuth::forWorkspace();
+
+            if (! $oauth) {
+                throw new RuntimeException('Бітрікс24 не підключено: портал команди має підключити адміністратор.');
+            }
+
+            try {
+                $tokens = $oauth->refresh($this->account->refresh_token);
+            } catch (RuntimeException $exception) {
+                // Refresh-токен живий 30 днів і згорає після відкликання доступу
+                // або перевстановлення застосунку — далі потрібна нова авторизація.
+                $this->account->delete();
+
+                throw new RuntimeException('Бітрікс24 відкликав доступ — підключіть портал заново на сторінці інтеграцій.', 0, $exception);
+            }
+
+            $this->account->forceFill([
+                'access_token' => $tokens['access_token'],
+                'refresh_token' => $tokens['refresh_token'],
+                'client_endpoint' => $tokens['client_endpoint'],
+                'expires_at' => now()->addSeconds($tokens['expires_in']),
+            ])->save();
+        });
+    }
+
     private function result(Response $response): array
     {
-        // 401/404 (невірний вебхук), 5xx — кидаємо RequestException, як у TrelloService.
+        // 401 (протухлий чи відкликаний токен), 5xx — кидаємо RequestException,
+        // як у TrelloService.
         $response->throw();
 
         $body = $response->json();

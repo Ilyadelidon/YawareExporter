@@ -8,18 +8,22 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
- * Командний портал Бітрікс24: один вхідний вебхук на всіх працівників.
- * Активною вважається єдина (остання) робоча область.
+ * Портал Бітрікс24 команди: адреса порталу + реквізити локального застосунку
+ * (OAuth 2.0), який на ньому зареєстрував адміністратор. Сам доступ до тасок
+ * дає не ця робоча область, а особистий токен кожного працівника —
+ * див. [[BitrixAccount]]. Активною вважається єдина (остання) робоча область.
  */
-#[Fillable(['portal_url', 'webhook_url', 'owner_name', 'connected_by'])]
-#[Hidden(['webhook_url'])]
+#[Fillable(['portal_url', 'client_id', 'client_secret', 'connected_by'])]
+#[Hidden(['client_id', 'client_secret'])]
 class BitrixWorkspace extends Model
 {
     protected function casts(): array
     {
         return [
-            // Вебхук — повноцінний ключ до REST порталу, у БД лежить зашифрованим.
-            'webhook_url' => 'encrypted',
+            // client_secret дозволяє обміняти код авторизації на токен працівника,
+            // тож у БД обидва реквізити лежать зашифрованими.
+            'client_id' => 'encrypted',
+            'client_secret' => 'encrypted',
         ];
     }
 
@@ -29,13 +33,21 @@ class BitrixWorkspace extends Model
     }
 
     /**
-     * Портал один на команду, тож підключення нового замінює попередній.
+     * Портал один на команду, тож підключення нового замінює попередній разом
+     * з усіма виданими на старому застосунку токенами працівників.
      */
     public static function connect(array $attributes): self
     {
         static::query()->delete();
+        BitrixAccount::query()->delete();
 
         return static::create($attributes);
+    }
+
+    /** Хост порталу (team.bitrix24.ua) — з ним звіряємо домен із відповіді OAuth. */
+    public function portalHost(): string
+    {
+        return (string) parse_url($this->portal_url, PHP_URL_HOST);
     }
 
     public function connectedBy(): BelongsTo

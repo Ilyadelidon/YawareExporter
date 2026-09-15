@@ -3,184 +3,230 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\BitrixAccount;
 use App\Models\BitrixWorkspace;
-use App\Models\User;
+use App\Services\BitrixOAuth;
 use App\Services\BitrixService;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
-use Throwable;
 
 /**
- * Бітрікс24 підключається інакше, ніж Trello: робоча область одна на команду.
- * Портал (вхідний вебхук) підключає адміністратор, а кожен працівник лише
- * обирає, який акаунт на цьому порталі його.
+ * Бітрікс24 підключається у два кроки: адміністратор один раз реєструє на
+ * порталі команди локальний застосунок (OAuth 2.0) і зберігає його реквізити,
+ * а далі кожен працівник авторизується в цьому застосунку особисто. Чий це
+ * акаунт — каже сам Бітрікс у відповідь на виданий токен, тож вибрати чужий
+ * акаунт (і читати чужі таски) неможливо.
  */
 class BitrixAccountController extends Controller
 {
-    /**
-     * Вхідний вебхук порталу: https://portal.bitrix24.ua/rest/<id>/<код>/
-     * Тільки https — це повноцінний ключ доступу до REST порталу.
-     */
-    private const WEBHOOK_PATTERN = '#^https://[\w.\-]+\.[a-z]{2,}/rest/\d+/[\w]+/?$#i';
+    /** Адреса порталу без шляху: https://team.bitrix24.ua */
+    private const PORTAL_PATTERN = '#^https://[\w.\-]+\.[a-z]{2,}/?$#i';
 
     public function status(Request $request): JsonResponse
     {
         $user = $request->user();
         $workspace = BitrixWorkspace::active();
+        $account = $user->bitrixAccount;
 
         return response()->json([
             'workspace_connected' => $workspace !== null,
             'portal_url' => $workspace?->portal_url,
-            'owner_name' => $workspace?->owner_name,
             'connected_by' => $workspace?->connectedBy?->name,
-            'user_id' => $user->bitrix_user_id,
-            'user_name' => $user->bitrix_user_name,
-            'connected' => $user->hasBitrixConnected(),
+            'user_id' => $account?->bitrix_user_id,
+            'user_name' => $account?->bitrix_user_name,
+            'user_email' => $account?->bitrix_email,
+            'connected' => $account !== null && $workspace !== null,
             // Портал підключає лише адміністратор — решті показуємо підказку.
             'can_manage' => $user->isAdmin(),
+            // Той самий шлях повернення треба вписати в застосунок на порталі.
+            'redirect_uri' => $user->isAdmin() ? $this->redirectUri() : null,
         ]);
     }
 
     /**
-     * Підключає портал команди. Вебхук перевіряємо викликом profile — заодно
-     * дізнаємось, від чийого імені підуть запити.
+     * Зберігає портал і реквізити локального застосунку. Перевірити їх тут
+     * нічим — Бітрікс визнає client_id лише в момент авторизації працівника,
+     * тож помилка в реквізитах спливе на першому ж «Підключити».
      */
     public function storeWorkspace(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'webhook' => ['required', 'string', 'max:500', 'regex:'.self::WEBHOOK_PATTERN],
+            'portal_url' => ['required', 'string', 'max:255', 'regex:'.self::PORTAL_PATTERN],
+            'client_id' => ['required', 'string', 'max:255'],
+            'client_secret' => ['required', 'string', 'max:255'],
         ], [
-            'webhook.regex' => 'Очікується посилання вхідного вебхука вигляду https://ваш-портал.bitrix24.ua/rest/1/код/',
+            'portal_url.regex' => 'Очікується адреса порталу вигляду https://ваш-портал.bitrix24.ua',
         ]);
 
-        $webhook = rtrim(trim($validated['webhook']), '/').'/';
-
-        try {
-            $profile = BitrixService::withWebhook($webhook)->profile();
-        } catch (RequestException|RuntimeException $exception) {
-            return $this->bitrixErrorResponse($exception, 'Бітрікс24 відхилив вебхук — перевірте, що він активний і має права на завдання.');
-        }
-
         $workspace = BitrixWorkspace::connect([
-            'portal_url' => BitrixService::portalUrlFromWebhook($webhook),
-            'webhook_url' => $webhook,
-            'owner_name' => $profile['name'],
+            'portal_url' => rtrim(trim($validated['portal_url']), '/'),
+            'client_id' => trim($validated['client_id']),
+            'client_secret' => trim($validated['client_secret']),
             'connected_by' => $request->user()->id,
         ]);
 
         return response()->json([
-            'message' => 'Портал Бітрікс24 підключено.',
+            'message' => 'Портал Бітрікс24 підключено. Тепер кожен працівник авторизується на ньому сам.',
             'portal_url' => $workspace->portal_url,
-            'owner_name' => $workspace->owner_name,
         ], 201);
     }
 
     /**
-     * Відключає портал команди. Вибрані акаунти працівників стають безпідставними,
-     * тож чистимо їх разом із робочою областю.
+     * Відключає портал команди разом з усіма виданими токенами працівників.
      */
     public function destroyWorkspace(): JsonResponse
     {
         BitrixWorkspace::query()->delete();
-
-        User::query()
-            ->whereNotNull('bitrix_user_id')
-            ->update(['bitrix_user_id' => null, 'bitrix_user_name' => null]);
+        BitrixAccount::query()->delete();
 
         return response()->json(['message' => 'Портал Бітрікс24 відключено.']);
     }
 
     /**
-     * Активні користувачі порталу — з них працівник обирає свій акаунт.
+     * Починає авторизацію працівника: повертає посилання на сторінку згоди
+     * порталу. state одноразовий і зберігає, чия саме це авторизація —
+     * callback приходить від браузера без сесії користувача.
      */
-    public function users(): JsonResponse
+    public function startAuthorization(Request $request): JsonResponse
     {
-        $bitrix = BitrixService::forWorkspace();
+        $oauth = BitrixOAuth::forWorkspace();
 
-        if (! $bitrix->hasWorkspace()) {
+        if (! $oauth) {
             return response()->json(['message' => 'Портал Бітрікс24 ще не підключено.'], 409);
         }
 
-        try {
-            $users = $bitrix->users();
-        } catch (RequestException|RuntimeException $exception) {
-            return $this->bitrixErrorResponse($exception);
-        }
+        $state = BitrixOAuth::newState();
 
-        return response()->json(['data' => $users]);
-    }
-
-    /**
-     * Прив'язує працівника до його акаунта на порталі — саме за ним
-     * фільтруються таски (RESPONSIBLE_ID).
-     */
-    public function selectUser(Request $request): JsonResponse
-    {
-        $bitrix = BitrixService::forWorkspace();
-
-        if (! $bitrix->hasWorkspace()) {
-            return response()->json(['message' => 'Портал Бітрікс24 ще не підключено.'], 409);
-        }
-
-        $validated = $request->validate([
-            'bitrix_user_id' => ['required', 'string', 'max:64'],
-        ]);
-
-        try {
-            $portalUsers = collect($bitrix->users());
-        } catch (RequestException|RuntimeException $exception) {
-            return $this->bitrixErrorResponse($exception);
-        }
-
-        $portalUser = $portalUsers->firstWhere('id', $validated['bitrix_user_id']);
-
-        if (! $portalUser) {
-            return response()->json(['message' => 'Такого користувача немає серед активних на порталі.'], 422);
-        }
-
-        $request->user()->forceFill([
-            'bitrix_user_id' => $portalUser['id'],
-            'bitrix_user_name' => $portalUser['name'],
-        ])->save();
+        Cache::put(
+            $this->stateKey($state),
+            $request->user()->id,
+            now()->addMinutes(BitrixOAuth::STATE_TTL_MINUTES),
+        );
 
         return response()->json([
-            'message' => 'Акаунт Бітрікса вибрано.',
-            'user' => $portalUser,
+            'url' => $oauth->authorizationUrl($state, $this->redirectUri()),
         ]);
     }
 
     /**
-     * Знімає прив'язку працівника до акаунта — сам портал команди лишається.
+     * Повернення з порталу: обмінюємо код на токени працівника і питаємо
+     * Бітрікс, кому вони видані. Відкривається в браузері, тож відповідаємо
+     * редіректом в інтерфейс, а не JSON.
+     */
+    public function callback(Request $request): RedirectResponse
+    {
+        $userId = Cache::pull($this->stateKey((string) $request->query('state')));
+
+        if (! $userId) {
+            return $this->backToApp('Посилання авторизації застаріло — почніть підключення заново.');
+        }
+
+        if ($request->query('error') || ! $request->query('code')) {
+            return $this->backToApp('Бітрікс24 відхилив авторизацію: '.($request->query('error') ?: 'код відсутній').'.');
+        }
+
+        $workspace = BitrixWorkspace::active();
+        $oauth = BitrixOAuth::forWorkspace($workspace);
+
+        if (! $oauth) {
+            return $this->backToApp('Портал Бітрікс24 більше не підключено.');
+        }
+
+        try {
+            $tokens = $oauth->exchangeCode((string) $request->query('code'), $this->redirectUri());
+        } catch (RequestException|RuntimeException $exception) {
+            Log::warning("Бітрікс24 не видав токен: {$exception->getMessage()}");
+
+            return $this->backToApp('Бітрікс24 не видав токен — перевірте реквізити застосунку.');
+        }
+
+        // Застосунок міг бути встановлений і на іншому порталі: приймаємо
+        // авторизацію лише з того, який підключила команда.
+        if ($tokens['portal_host'] && mb_strtolower($tokens['portal_host']) !== mb_strtolower($workspace->portalHost())) {
+            return $this->backToApp('Це інший портал Бітрікса — авторизуйтесь на '.$workspace->portalHost().'.');
+        }
+
+        try {
+            $profile = BitrixService::profileWithToken($tokens['client_endpoint'], $tokens['access_token']);
+        } catch (RequestException|RuntimeException $exception) {
+            Log::warning("Бітрікс24 не віддав профіль: {$exception->getMessage()}");
+
+            return $this->backToApp('Не вдалося отримати ваш профіль на порталі — спробуйте ще раз.');
+        }
+
+        if (! $profile['id']) {
+            return $this->backToApp('Бітрікс24 не повернув ваш акаунт на порталі.');
+        }
+
+        // Пошта й ім'я — з картки користувача: profile часто віддає їх порожніми.
+        $card = ['name' => null, 'email' => null];
+
+        try {
+            $card = BitrixService::userCardWithToken($tokens['client_endpoint'], $tokens['access_token'], $profile['id']);
+        } catch (RequestException|RuntimeException $exception) {
+            Log::info("Бітрікс24 не віддав картку користувача: {$exception->getMessage()}");
+        }
+
+        // Один акаунт порталу — один наш користувач: інакше двоє отримували б
+        // однакові таски, і незрозуміло, чий це насправді робочий день.
+        $takenByOther = BitrixAccount::query()
+            ->where('bitrix_user_id', $profile['id'])
+            ->where('user_id', '!=', $userId)
+            ->exists();
+
+        if ($takenByOther) {
+            return $this->backToApp('Цей акаунт Бітрікса вже прив’язано до іншого користувача сервісу.');
+        }
+
+        BitrixAccount::updateOrCreate(['user_id' => $userId], [
+            'bitrix_user_id' => $profile['id'],
+            'bitrix_user_name' => $card['name'] ?: ($profile['name'] ?: $card['email'] ?: "Акаунт #{$profile['id']}"),
+            'bitrix_email' => $card['email'] ?: $profile['email'],
+            'member_id' => $tokens['member_id'],
+            'client_endpoint' => $tokens['client_endpoint'],
+            'access_token' => $tokens['access_token'],
+            'refresh_token' => $tokens['refresh_token'],
+            'expires_at' => now()->addSeconds($tokens['expires_in']),
+        ]);
+
+        return $this->backToApp(null);
+    }
+
+    /**
+     * Відв'язує акаунт працівника — токени видаляються, портал команди лишається.
      */
     public function destroyUser(Request $request): JsonResponse
     {
-        $request->user()->forceFill([
-            'bitrix_user_id' => null,
-            'bitrix_user_name' => null,
-        ])->save();
+        $request->user()->bitrixAccount?->delete();
 
-        return response()->json(['message' => 'Акаунт Бітрікса відв\'язано.']);
+        return response()->json(['message' => 'Акаунт Бітрікса відв’язано.']);
     }
 
-    private function bitrixErrorResponse(Throwable $exception, ?string $fallback = null): JsonResponse
+    private function stateKey(string $state): string
     {
-        if ($exception instanceof RequestException) {
-            $status = $exception->response->status();
+        return 'bitrix.oauth.state.'.$state;
+    }
 
-            return response()->json([
-                'message' => $fallback ?? (in_array($status, [401, 403, 404], true)
-                    ? 'Бітрікс24 відхилив вебхук — портал треба підключити заново.'
-                    : "Не вдалося звернутися до Бітрікс24 (HTTP {$status})."),
-            ], 502);
-        }
+    /**
+     * Той самий redirect_uri має бути вказаний у налаштуваннях застосунку на
+     * порталі — Бітрікс звіряє його побайтово.
+     */
+    private function redirectUri(): string
+    {
+        return url('/api/bitrix/oauth/callback');
+    }
 
-        Log::warning("Бітрікс24 повернув помилку: {$exception->getMessage()}");
+    private function backToApp(?string $error): RedirectResponse
+    {
+        $app = rtrim(config('services.bitrix.frontend_url') ?: config('app.url'), '/');
 
-        return response()->json([
-            'message' => $fallback ?? "Бітрікс24 повернув помилку: {$exception->getMessage()}",
-        ], 502);
+        return redirect()->away($app.'/integrations?'.http_build_query(
+            $error ? ['bitrix' => 'error', 'bitrix_message' => $error] : ['bitrix' => 'connected'],
+        ));
     }
 }

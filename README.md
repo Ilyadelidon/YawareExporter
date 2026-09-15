@@ -102,8 +102,9 @@ php artisan test
 SQLite-бази. Перед клонуванням на нову машину врахуйте:
 
 - `APP_KEY` треба **переносити**, а не генерувати заново: касти `encrypted`
-  шифрують `users.trello_token`, `bitrix_workspaces.webhook_url` і
-  `employees.yaware_password` — з новим ключем вони не розшифруються.
+  шифрують `users.trello_token`, реквізити застосунку в `bitrix_workspaces`,
+  токени працівників у `bitrix_accounts` і `employees.yaware_password` —
+  з новим ключем вони не розшифруються.
 - Портативні `node/`, `python/`, `browsers/` з Windows-теки в git не потрапляють
   і на сервер не переносяться — там системні пакети та Chromium з кешу Playwright.
 

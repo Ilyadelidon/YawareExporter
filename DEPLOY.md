@@ -71,7 +71,8 @@ Chromium з кешу Playwright.
 - Скопіювати `backend/storage/app/google/oauth-token.json` (refresh-токен
   адмінського Google-акаунта illadelidon95@gmail.com)
 - `php artisan key:generate` НЕ запускати, а перенести локальний `APP_KEY` —
-  інакше не розшифруються `users.trello_token`, `bitrix_workspaces.webhook_url`,
+  інакше не розшифруються `users.trello_token`, реквізити застосунку в
+  `bitrix_workspaces`, токени в `bitrix_accounts`,
   `employees.yaware_password` та кеш перевірок логіну (усі касти 'encrypted')
 
 ## 4. nginx
@@ -134,10 +135,19 @@ Chromium). Після деплою нового коду — `systemctl restart`
 
 - **Trello** (https://trello.com/power-ups/admin): додати `https://<домен>`
   в Allowed Origins API-ключа
-- **Бітрікс24** (якщо команда на ньому): env-секретів не потрібно —
-  адміністратор підключає портал у розділі «Працівники», вставивши посилання
-  вхідного вебхука (Розробникам → Інші → Вхідний вебхук, права `task` і `user`).
-  Вебхук зберігається зашифрованим у `bitrix_workspaces` і не протухає.
+- **Бітрікс24** (якщо команда на ньому): env-секретів не потрібно, але на
+  порталі треба зареєструвати локальний застосунок — Розробникам → Інші →
+  Локальний застосунок, тип **«Серверний»**, права `task` і `user`
+  (саме повний `user`: з `user_brief` портал не віддає пошту, і в інтерфейсі
+  не видно, під яким акаунтом підключився працівник),
+  шлях повернення (redirect URI) рівно `https://<домен>/api/bitrix/oauth/callback`.
+  Отримані `client_id` і `client_secret` адміністратор вставляє в розділі
+  «Працівники» — вони лягають зашифрованими в `bitrix_workspaces`.
+  Далі кожен працівник тисне «Увійти через Бітрікс24» і авторизується сам:
+  його токени лежать у `bitrix_accounts`, і сервіс читає таски від його імені
+  (спільного ключа на команду більше немає — чужі таски недосяжні).
+  `access_token` живе годину й оновлюється автоматично; `refresh_token` —
+  30 днів, тож працівник, який місяць не з'являвся у звітах, авторизується заново.
 - **Google Cloud Console**: у OAuth-клієнта додати redirect URI
   `https://<домен>/google/callback`; consent screen уже в Production
 - `SANCTUM_STATEFUL_DOMAINS`/`SESSION_DOMAIN`/CORS у Laravel — прод-домен

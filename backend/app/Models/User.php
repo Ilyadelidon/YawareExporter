@@ -85,12 +85,12 @@ class User extends Authenticatable
     }
 
     /**
-     * Портал Бітрікса підключає адміністратор на всю команду — користувачу
-     * лишається вказати, який акаунт на цьому порталі його.
+     * Портал Бітрікса підключає адміністратор на всю команду, а працівник
+     * авторизується на ньому особисто — токен у кожного свій.
      */
     public function hasBitrixConnected(): bool
     {
-        return $this->bitrix_user_id !== null && BitrixWorkspace::active() !== null;
+        return $this->bitrixAccount !== null && BitrixWorkspace::active() !== null;
     }
 
     /**
@@ -126,6 +126,12 @@ class User extends Authenticatable
     public function employee(): HasOne
     {
         return $this->hasOne(Employee::class);
+    }
+
+    /** Особистий доступ до порталу Бітрікса — токени, видані самому працівнику. */
+    public function bitrixAccount(): HasOne
+    {
+        return $this->hasOne(BitrixAccount::class);
     }
 
     public function isAdmin(): bool

@@ -26,6 +26,11 @@ Route::get('/auth/login/pending/{checkId}', [AuthController::class, 'loginStatus
 // Вебхук Telegram: без auth (його кличе Telegram), захищений секретом у заголовку.
 Route::post('/telegram/webhook', [TelegramController::class, 'webhook'])->middleware('throttle:60,1');
 
+// Повернення з авторизації Бітрікса: браузер працівника приходить сюди без
+// токена Sanctum, тож упізнаємо його за одноразовим state з посилання.
+Route::get('/bitrix/oauth/callback', [BitrixAccountController::class, 'callback'])
+    ->middleware('throttle:20,1');
+
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('/auth/logout', [AuthController::class, 'logout']);
     Route::get('/auth/me', [AuthController::class, 'me']);
@@ -46,11 +51,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/trello/boards', [TrelloAccountController::class, 'createBoard']);
     Route::put('/trello/board', [TrelloAccountController::class, 'selectBoard']);
 
-    // Портал Бітрікса один на команду: статус і вибір свого акаунта доступні
-    // всім, підключення й відключення самого порталу — лише адміністратору.
+    // Портал Бітрікса один на команду: підключає його адміністратор, а
+    // працівник лише починає власну авторизацію на цьому порталі.
     Route::get('/bitrix/status', [BitrixAccountController::class, 'status']);
-    Route::get('/bitrix/users', [BitrixAccountController::class, 'users']);
-    Route::put('/bitrix/user', [BitrixAccountController::class, 'selectUser']);
+    Route::post('/bitrix/oauth/start', [BitrixAccountController::class, 'startAuthorization']);
     Route::delete('/bitrix/user', [BitrixAccountController::class, 'destroyUser']);
 
     Route::get('/telegram/status', [TelegramController::class, 'status']);

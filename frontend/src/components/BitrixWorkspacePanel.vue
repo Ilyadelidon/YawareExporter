@@ -4,16 +4,27 @@ import Message from 'primevue/message';
 import client from '../api/client';
 
 // Робоча область Бітрікс24 одна на команду, тому підключає її адміністратор:
-// один вхідний вебхук порталу, від імені якого сервіс читає таски всіх працівників.
+// портал і реквізити локального застосунку (OAuth 2.0). Доступ до тасок дає не
+// вона, а особистий токен кожного працівника — його видає сам Бітрікс.
 const loading = ref(true);
 const status = ref(null);
-const webhook = ref('');
+const portalUrl = ref('');
+const clientId = ref('');
+const clientSecret = ref('');
 const saving = ref(false);
 const disconnecting = ref(false);
 const errorMessage = ref('');
 const actionMessage = ref('');
 
 const connected = computed(() => Boolean(status.value?.workspace_connected));
+
+// Той самий redirect_uri треба вказати в налаштуваннях застосунку на порталі —
+// Бітрікс звіряє його побайтово, тож адресу дає бекенд, а не фронтенд.
+const redirectUri = computed(() => status.value?.redirect_uri || '');
+
+const canSubmit = computed(() => Boolean(
+  portalUrl.value.trim() && clientId.value.trim() && clientSecret.value.trim(),
+));
 
 async function loadStatus() {
   try {
@@ -27,14 +38,18 @@ async function loadStatus() {
 }
 
 async function connect() {
-  if (!webhook.value.trim()) return;
+  if (!canSubmit.value) return;
   saving.value = true;
   errorMessage.value = '';
   actionMessage.value = '';
   try {
-    const { data } = await client.post('/bitrix/workspace', { webhook: webhook.value.trim() });
-    actionMessage.value = `${data.message} Запити йдуть від імені: ${data.owner_name}.`;
-    webhook.value = '';
+    const { data } = await client.post('/bitrix/workspace', {
+      portal_url: portalUrl.value.trim(),
+      client_id: clientId.value.trim(),
+      client_secret: clientSecret.value.trim(),
+    });
+    actionMessage.value = data.message;
+    clientSecret.value = '';
     await loadStatus();
   } catch (error) {
     errorMessage.value = error.response?.data?.message
@@ -46,7 +61,7 @@ async function connect() {
 }
 
 async function disconnect() {
-  if (!window.confirm('Відключити портал Бітрікс24? Привʼязані акаунти працівників буде скинуто, і їхні звіти перестануть отримувати таски з Бітрікса.')) return;
+  if (!window.confirm('Відключити портал Бітрікс24? Токени всіх працівників буде видалено, і їхні звіти перестануть отримувати таски з Бітрікса.')) return;
   disconnecting.value = true;
   errorMessage.value = '';
   actionMessage.value = '';
@@ -78,8 +93,8 @@ onMounted(loadStatus);
           </span>
         </div>
         <div class="workspace-subtitle">
-          Один портал на всю команду. Працівники, які вибрали Бітрікс, далі лише вказують
-          у себе свій акаунт на цьому порталі.
+          Один портал на всю команду. Працівники, які вибрали Бітрікс, входять на нього
+          під собою — сервіс читає таски від імені кожного, а не спільним ключем.
         </div>
       </div>
     </div>
@@ -95,8 +110,8 @@ onMounted(loadStatus);
           </a>
         </div>
         <div>
-          <div class="field-label">Запити йдуть від імені</div>
-          <div class="workspace-value">{{ status.owner_name || '—' }}</div>
+          <div class="field-label">Доступ</div>
+          <div class="workspace-value">особистий у кожного працівника (OAuth)</div>
         </div>
         <div v-if="status.connected_by">
           <div class="field-label">Підключив</div>
@@ -105,7 +120,8 @@ onMounted(loadStatus);
       </div>
       <div class="workspace-foot">
         <span class="workspace-note">
-          Щоб замінити вебхук, підключіть портал заново — попередній буде замінено.
+          Щоб замінити реквізити застосунку, підключіть портал заново — працівникам
+          доведеться авторизуватись ще раз.
         </span>
         <button class="workspace-unlink" type="button" :disabled="disconnecting" @click="disconnect">
           {{ disconnecting ? 'Відключаємо…' : 'Відключити портал' }}
@@ -114,24 +130,49 @@ onMounted(loadStatus);
     </template>
 
     <template v-else>
-      <div class="field-label">Посилання вхідного вебхука</div>
+      <div class="field-label">Адреса порталу</div>
+      <input
+        v-model="portalUrl"
+        type="text"
+        class="workspace-input is-block"
+        placeholder="https://ваш-портал.bitrix24.ua"
+        maxlength="255"
+      >
+
+      <div class="field-label">ID застосунку (client_id)</div>
+      <input
+        v-model="clientId"
+        type="text"
+        class="workspace-input is-block"
+        placeholder="local.6xxxxxxxxxxxxx.xxxxxxxx"
+        maxlength="255"
+      >
+
+      <div class="field-label">Ключ застосунку (client_secret)</div>
       <div class="workspace-form">
         <input
-          v-model="webhook"
-          type="text"
+          v-model="clientSecret"
+          type="password"
           class="workspace-input"
-          placeholder="https://ваш-портал.bitrix24.ua/rest/1/код/"
-          maxlength="500"
+          placeholder="Секретний ключ зі сторінки застосунку"
+          maxlength="255"
+          autocomplete="off"
           @keyup.enter="connect"
         >
-        <button class="workspace-btn" type="button" :disabled="saving || !webhook.trim()" @click="connect">
-          {{ saving ? 'Перевіряємо…' : 'Підключити' }}
+        <button class="workspace-btn" type="button" :disabled="saving || !canSubmit" @click="connect">
+          {{ saving ? 'Зберігаємо…' : 'Підключити' }}
         </button>
       </div>
+
       <p class="workspace-note">
-        У Бітріксі: <strong>Розробникам → Інші → Вхідний вебхук</strong>. Потрібні права
-        <strong>task</strong> (Завдання) і <strong>user</strong> (Користувачі). Вебхук не протухає,
-        тому створити його достатньо один раз; зберігається він зашифрованим.
+        У Бітріксі: <strong>Розробникам → Інші → Локальний застосунок</strong> →
+        тип <strong>«Серверний»</strong>. Права: <strong>task</strong> (Завдання) і
+        <strong>user</strong> (Користувачі — з обмеженим <code class="workspace-code">user_brief</code>
+        портал не віддає пошту, і працівник не побачить, яким акаунтом підключився).
+        Шлях повернення (redirect URI):
+        <code class="workspace-code">{{ redirectUri }}</code> — скопіюйте його в застосунок
+        без змін. Ключ застосунку зберігається зашифрованим; самі таски сервіс читає
+        не ним, а особистим токеном працівника.
       </p>
     </template>
 
@@ -259,6 +300,21 @@ onMounted(loadStatus);
 .workspace-input:focus {
   outline: none;
   border-color: var(--accent);
+}
+
+/* Поля реквізитів застосунку йдуть одне під одним, кнопка — біля останнього. */
+.workspace-input.is-block {
+  width: 100%;
+  margin-bottom: 12px;
+}
+
+.workspace-code {
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text-dim);
+  background: var(--surface-2, rgba(0, 0, 0, 0.04));
+  padding: 1px 5px;
+  word-break: break-all;
 }
 
 .workspace-btn {
