@@ -44,7 +44,8 @@ cd /var/www/yaware/app && npx playwright install --with-deps chromium
 
 Копіюємо `backend/`, `frontend/` (тільки сирці — `dist` збираємо на місці або
 заливаємо готовий), `app/` (worker-скрипт + package.json, `node_modules`
-ставимо через `npm ci` на сервері). Портативні `node/`, `python/`, `browsers/`
+ставимо через `npm ci` на сервері) і `ops/` (скрипт бекапу й конфіг logrotate,
+розділи 5б і 5в; `chmod +x ops/backup-db.sh` після копіювання). Портативні `node/`, `python/`, `browsers/`
 з Windows-теки **не переносимо** — на сервері системні node/python3 і
 Chromium з кешу Playwright.
 
@@ -130,6 +131,75 @@ Chromium). Після деплою нового коду — `systemctl restart`
 
 Перевірити режим:
 `sudo -u www-data HOME=/tmp php artisan tinker --execute='echo DB::select("PRAGMA journal_mode")[0]->journal_mode;'`
+
+## 5б. Бекап бази щодня (зроблено 2026-09-15)
+
+У базі лежить усе, чого немає більше ніде: звіти, активності, AI-розбори,
+пам'ять по працівниках і зашифровані токени інтеграцій. Excel-файли звітів
+можна перегенерувати з Yaware, ці дані — ні.
+
+Робить копію `ops/backup-db.sh` (лежить у репозиторії поруч із `backend/`,
+на сервер копіюється разом з рештою):
+
+```
+BACKUP_REMOTE='backup@host:/srv/backups/teamreporter/' /var/www/yaware/ops/backup-db.sh
+```
+
+Що він робить і чому саме так:
+
+- `sqlite3 .backup` замість `cp` — база в режимі WAL (розділ 5а), просте
+  копіювання лишає свіжі транзакції в `-wal`;
+- **перевіряє копію** `PRAGMA integrity_check` і дивиться, що в ній є звіти:
+  бекап, який не відкривається, гірший за відсутній, бо на нього розраховують.
+  Це і є щоденна перевірка відновлення замість разової ручної;
+- тримає останні `BACKUP_KEEP` копій (14) у `BACKUP_DIR`
+  (`/var/backups/teamreporter`), стиснутими;
+- якщо задано `BACKUP_REMOTE` — відвозить копію туди через rsync. **Без цього
+  бекап рятує від помилкової міграції, але не від втрати самого VPS**, заради
+  чого він і потрібен;
+- лишає позначку `storage/app/ops-backup.json`, за якою `ops:healthcheck`
+  бачить, що бекап живий (див. нижче).
+
+Cron — **під `www-data`**, тим самим користувачем, що й воркери
+(`crontab -u www-data -e`):
+
+```
+30 3 * * * BACKUP_REMOTE='backup@host:/srv/backups/teamreporter/' /var/www/yaware/ops/backup-db.sh >> /var/www/yaware/backend/storage/logs/backup.log 2>&1
+```
+
+Запуск від root тут не просто негарний: відкриття WAL-бази створює
+`database.sqlite-shm` з власником root, і queue-воркери втратять доступ до
+бази — та сама пастка, що з artisan у розділі 5а. Для `BACKUP_REMOTE` потрібен
+ssh-ключ у `~www-data/.ssh` (`ssh -o BatchMode=yes`, без пароля) і разова
+перевірка з'єднання руками.
+
+**Відновлення:**
+
+```
+systemctl stop yaware-queue-default yaware-queue-logins yaware-queue-analysis
+gunzip -c /var/backups/teamreporter/teamreporter-<дата>.sqlite.gz > /tmp/restore.sqlite
+sqlite3 /tmp/restore.sqlite 'PRAGMA integrity_check;'
+sudo -u www-data cp /tmp/restore.sqlite /var/www/yaware/backend/database/database.sqlite
+rm -f /var/www/yaware/backend/database/database.sqlite-wal /var/www/yaware/backend/database/database.sqlite-shm
+systemctl start yaware-queue-default yaware-queue-logins yaware-queue-analysis
+```
+
+Копія без `APP_KEY` марна: усі касти `encrypted` (токени Бітрікса й Trello,
+паролі Yaware) з іншим ключем не розшифруються. Ключ зберігається окремо від
+бекапів — інакше той, хто дістав копію бази, дістав і все, що в ній зашифровано.
+
+## 5в. Ротація логів (зроблено 2026-09-15)
+
+- `laravel.log` ротує сам Laravel: у `.env` `LOG_STACK=daily` і
+  `LOG_DAILY_DAYS=14` (у шаблоні вже так). Без цього один файл ріс місяцями,
+  поки не з'їдав диск під звітами.
+- `LOG_LEVEL=info` на проді: на `debug` у лог іде кожен HTTP-запит до Yaware,
+  Trello, Бітрікса й Google.
+- `scheduler.log` пише не Laravel, а `appendOutputTo` у `routes/console.php`,
+  тож його ротує logrotate: `cp ops/logrotate-teamreporter
+  /etc/logrotate.d/teamreporter`. Той самий файл добиває `laravel.log`, що
+  лишився від старого режиму `single`. Перевірка:
+  `logrotate -d /etc/logrotate.d/teamreporter`.
 
 ## 6. Зовнішні сервіси — перемкнути на прод-домен
 
@@ -441,6 +511,8 @@ Chromium). Після деплою нового коду — `systemctl restart`
 | AI-розбори зі статусом `failed` | вичерпані кредити або невалідний ключ |
 | непорожній `failed_jobs` | джоби, що впали остаточно |
 | найстаріша джоба чекає понад 30 хв | queue-воркер зупинився |
+| бекапу бази немає понад 36 год | мертвий cron бекапу (розділ 5б) |
+| бекап є, але лише на цьому сервері | не задано BACKUP_REMOTE |
 | менше 10% вільного місця | звіти скоро перестануть зберігатись |
 
 Знайдене йде одним повідомленням у Telegram на `OPS_TELEGRAM_EMAIL`. Той самий
@@ -448,6 +520,10 @@ Chromium). Після деплою нового коду — `systemctl restart`
 сповіщення щопівгодини швидко почали б ігнорувати разом з усіма іншими.
 Ручний запуск: `sudo -u www-data HOME=/tmp php artisan ops:healthcheck --force`
 (`--force` шле сповіщення, навіть якщо про ці проблеми вже повідомляли).
+
+Позначку про останній бекап монітор читає з `storage/app/ops-backup.json` —
+її пише `ops/backup-db.sh`. Бекап, що тихо перестав робитись, інакше помітили б
+лише тоді, коли він знадобиться.
 
 Стан монітора лежить у `storage/app/ops-state.json` — саме у файлі, а не в
 кеші: `cache:clear` на кожному деплої стирав би позначку про ранковий прогін,

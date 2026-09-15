@@ -1,0 +1,27 @@
+# Ротація логів TeamReporter. Кладеться в /etc/logrotate.d/teamreporter.
+#
+# laravel.log ротується самим Laravel (LOG_STACK=daily, LOG_DAILY_DAYS), тому
+# тут його немає — інакше два механізми різали б той самий файл. Лишається те,
+# що пише не Laravel:
+#
+#   scheduler.log — вивід `schedule:run` (appendOutputTo у routes/console.php).
+#                   Дописується щопівгодини від ops:healthcheck і щоранку від
+#                   автогенерації, тож без ротації росте роками.
+#   laravel.log   — файл, що лишився від старого режиму `single`. Рядок нижче
+#                   доводить його до кінця й прибирає; після переходу на daily
+#                   нові записи йдуть у laravel-YYYY-MM-DD.log.
+#
+# su — обов'язкове: тека storage/logs належить www-data, і без нього logrotate
+# відмовиться ротувати файли в теці, якою не володіє root.
+
+/var/www/yaware/backend/storage/logs/scheduler.log
+/var/www/yaware/backend/storage/logs/laravel.log {
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    su www-data www-data
+    create 0640 www-data www-data
+}

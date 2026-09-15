@@ -35,6 +35,8 @@ screenshots/
 !frontend/src/**/*.png
 !frontend/src/**/*.jpg
 backend/storage/app/reports/
+backend/storage/app/ops-state.json
+backend/storage/app/ops-backup.json
 backend/database/*.sqlite
 backend/database/*.sqlite-journal
 # Супутні файли режиму WAL

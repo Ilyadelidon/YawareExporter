@@ -36,6 +36,10 @@ class OpsHealthcheckTest extends TestCase
         // між тестами його треба прибирати руками.
         File::delete(storage_path('app/ops-state.json'));
 
+        // Позначку про бекап ставимо в той самий день, у якому живуть сценарії
+        // (travelTo нижче), інакше кожен із них ловив би ще й скаргу на бекап.
+        $this->backupMarker('2026-07-20 06:00');
+
         $user = User::factory()->create(['email' => 'ilya.dev2715@gmail.com']);
         $user->forceFill(['telegram_chat_id' => '555000'])->save();
     }
@@ -43,8 +47,22 @@ class OpsHealthcheckTest extends TestCase
     protected function tearDown(): void
     {
         File::delete(storage_path('app/ops-state.json'));
+        File::delete(storage_path('app/ops-backup.json'));
 
         parent::tearDown();
+    }
+
+    /**
+     * Позначка, яку лишає ops/backup-db.sh після вдалого бекапу.
+     */
+    private function backupMarker(string $at, bool $remote = true): void
+    {
+        File::put(storage_path('app/ops-backup.json'), json_encode([
+            'at' => CarbonImmutable::parse($at, 'Europe/Kyiv')->toIso8601String(),
+            'path' => '/var/backups/teamreporter/teamreporter-2026-07-20-0600.sqlite.gz',
+            'bytes' => 1048576,
+            'remote' => $remote,
+        ]));
     }
 
     private function employee(): Employee
@@ -89,6 +107,43 @@ class OpsHealthcheckTest extends TestCase
         $this->artisan('ops:healthcheck')->assertSuccessful();
 
         Http::assertNothingSent();
+    }
+
+    public function test_missing_backup_is_reported(): void
+    {
+        Http::fake();
+        File::delete(storage_path('app/ops-backup.json'));
+        $this->travelTo(CarbonImmutable::parse('2026-07-20 09:00', 'Europe/Kyiv'));
+        app(OpsMonitor::class)->recordDailyRun();
+
+        $this->artisan('ops:healthcheck')->assertSuccessful();
+
+        $this->assertStringContainsString('Бекапу бази ще не було', $this->alerts()[0]);
+    }
+
+    public function test_stale_backup_raises_alarm(): void
+    {
+        Http::fake();
+        // Остання копія — позавчора: щоденний cron мовчки перестав працювати.
+        $this->backupMarker('2026-07-18 06:00');
+        $this->travelTo(CarbonImmutable::parse('2026-07-20 09:00', 'Europe/Kyiv'));
+        app(OpsMonitor::class)->recordDailyRun();
+
+        $this->artisan('ops:healthcheck')->assertSuccessful();
+
+        $this->assertStringContainsString('Свіжого бекапу бази немає', $this->alerts()[0]);
+    }
+
+    public function test_backup_without_a_copy_off_the_server_is_reported(): void
+    {
+        Http::fake();
+        $this->backupMarker('2026-07-20 06:00', remote: false);
+        $this->travelTo(CarbonImmutable::parse('2026-07-20 09:00', 'Europe/Kyiv'));
+        app(OpsMonitor::class)->recordDailyRun();
+
+        $this->artisan('ops:healthcheck')->assertSuccessful();
+
+        $this->assertStringContainsString('лишається на цьому ж сервері', $this->alerts()[0]);
     }
 
     public function test_missed_morning_run_raises_alarm(): void

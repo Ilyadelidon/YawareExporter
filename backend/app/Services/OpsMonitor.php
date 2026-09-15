@@ -44,11 +44,17 @@ class OpsMonitor
     /** Та сама проблема не повторюється частіше, ніж раз на стільки годин. */
     private const REPEAT_ALERT_HOURS = 6;
 
+    /** Бекап, старіший за це, — ознака, що щоденний cron більше не працює. */
+    private const BACKUP_STALE_HOURS = 36;
+
     private string $statePath;
+
+    private string $backupMarkerPath;
 
     public function __construct()
     {
         $this->statePath = storage_path('app/ops-state.json');
+        $this->backupMarkerPath = storage_path('app/ops-backup.json');
     }
 
     /**
@@ -79,6 +85,7 @@ class OpsMonitor
             $this->failedAnalyses($now),
             $this->failedJobs($now),
             $this->stalledQueue($now),
+            $this->staleBackup($now),
             $this->lowDisk(),
         ]));
     }
@@ -279,6 +286,40 @@ class OpsMonitor
 
         return $percent < self::MIN_FREE_DISK_PERCENT
             ? "На диску лишилось {$percent}% вільного місця — звіти скоро перестануть зберігатись."
+            : null;
+    }
+
+    /**
+     * Бекап бази робить cron (ops/backup-db.sh), а не Laravel, — звідси файл із
+     * позначкою замість запису в базі: позначку, що лежить у самій базі, разом
+     * із нею і втрачають.
+     *
+     * Мовчазна відмова тут найдорожча з усіх: бекап, що перестав робитись,
+     * ніяк себе не проявляє, поки не знадобиться.
+     */
+    private function staleBackup(CarbonImmutable $now): ?string
+    {
+        if (! is_file($this->backupMarkerPath)) {
+            return 'Бекапу бази ще не було: cron ops/backup-db.sh не налаштований (див. DEPLOY.md, розділ 5б).';
+        }
+
+        try {
+            $marker = json_decode((string) file_get_contents($this->backupMarkerPath), true, 512, JSON_THROW_ON_ERROR);
+            $at = CarbonImmutable::parse($marker['at']);
+        } catch (Throwable) {
+            return 'Позначка бекапу (storage/app/ops-backup.json) нечитабельна — перевірте ops/backup-db.sh.';
+        }
+
+        $hours = (int) round($at->diffInHours($now));
+
+        if ($hours >= self::BACKUP_STALE_HOURS) {
+            return "Свіжого бекапу бази немає {$hours} год. Перевірте cron під www-data і вивід ops/backup-db.sh.";
+        }
+
+        // Копії на тому ж диску рятують від помилкової міграції, але не від
+        // втрати самого VPS — заради чого бекап і робиться.
+        return ($marker['remote'] ?? false) === false
+            ? 'Бекап бази робиться, але лишається на цьому ж сервері: BACKUP_REMOTE не задано.'
             : null;
     }
 
