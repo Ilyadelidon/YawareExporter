@@ -86,7 +86,9 @@ class AiAnalysisController extends Controller
             ],
         );
 
-        GenerateDailyAnalysis::dispatch($report, $provider->name());
+        // force: кнопку «Проаналізувати ще раз» тиснуть саме тоді, коли хочуть
+        // свіжий розбір, — навіть якщо дані дня відтоді не змінились.
+        GenerateDailyAnalysis::dispatch($report, $provider->name(), force: true);
 
         return response()->json(['data' => $analysis], 202);
     }

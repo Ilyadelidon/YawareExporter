@@ -9,6 +9,7 @@ use App\Services\Ai\AnalysisProvider;
 use App\Services\Ai\AnthropicProvider;
 use App\Services\Ai\DeepseekProvider;
 use App\Services\Ai\EmployeeMemoryService;
+use App\Services\Ai\RuleViolations;
 use Illuminate\Support\Collection;
 use RuntimeException;
 
@@ -25,6 +26,16 @@ class AiAnalysisService
 {
     /** Стеля рядків активності в промпті — довгі дні інакше роздувають вхід. */
     private const MAX_ACTIVITIES = 200;
+
+    /**
+     * Стелі довжини для тексту, який пише сам працівник (назви й коментарі
+     * тасок). Довший за це текст у назві таски — це вже не назва, а спроба
+     * щось передати моделі; див. AnalysisPrompt::system() про межу даних.
+     */
+    private const MAX_TASK_TEXT = 300;
+
+    /** Те саме для назв активностей: тут це домен або назва застосунку. */
+    private const MAX_ACTIVITY_NAME = 120;
 
     /** @var array<string, class-string<AnalysisProvider>> */
     public const PROVIDERS = [
@@ -77,18 +88,38 @@ class AiAnalysisService
     }
 
     /**
+     * @param  ?array<string, mixed>  $context  Готові дані дня — щоб той, хто
+     *                                          вже будував їх заради хеша, не
+     *                                          збирав їх удруге.
      * @return array{result: array<string, mixed>, model: string, provider: string, input_tokens: int, output_tokens: int}
      */
-    public function analyse(Report $report, ?string $providerName = null): array
+    public function analyse(Report $report, ?string $providerName = null, ?array $context = null): array
     {
         $provider = $this->provider($providerName);
-        $context = $this->buildContext($report);
+        $context ??= $this->buildContext($report);
 
         if (empty($context['activities']) && empty($context['tasks'])) {
             throw new RuntimeException('За цей день немає ні активностей, ні тасок — аналізувати нічого.');
         }
 
-        return $provider->analyse($context) + ['provider' => $provider->name()];
+        $outcome = $provider->analyse($context);
+
+        // Порушення за графіком дописуємо самі — вони рахуються з цифр дня і не
+        // мають залежати від того, що модель прочитала в назвах тасок.
+        $outcome['result'] = RuleViolations::merge($outcome['result'], $context);
+
+        return $outcome + ['provider' => $provider->name()];
+    }
+
+    /**
+     * Відбиток даних дня: поки він не змінився, новий запит до моделі дасть той
+     * самий розбір і платити за нього вдруге немає за що.
+     *
+     * @param  array<string, mixed>  $context
+     */
+    public static function contextHash(array $context): string
+    {
+        return sha1((string) json_encode($context, JSON_UNESCAPED_UNICODE));
     }
 
     /**
@@ -133,7 +164,7 @@ class AiAnalysisService
             // модель не перешукувала ті самі домени щодня.
             'memory' => app(EmployeeMemoryService::class)->forPrompt($report->employee_id),
             'activities' => $activities->map(fn (ActivityEntry $entry) => [
-                'name' => $entry->name,
+                'name' => self::clean($entry->name, self::MAX_ACTIVITY_NAME),
                 'productivity' => $entry->productivity,
                 'category' => $entry->category,
                 'duration_seconds' => $entry->duration_seconds,
@@ -141,7 +172,7 @@ class AiAnalysisService
             // Підказка моделі, з чого починати пошук незрозумілого.
             'uncategorized_names' => $activities
                 ->filter(fn (ActivityEntry $entry) => $entry->category === null)
-                ->pluck('name')
+                ->map(fn (ActivityEntry $entry) => self::clean($entry->name, self::MAX_ACTIVITY_NAME))
                 ->values()
                 ->all(),
         ];
@@ -156,11 +187,32 @@ class AiAnalysisService
     {
         return Collection::make($report->tasks ?? [])
             ->map(fn (array $task) => [
-                'name' => $task['name'] ?? null,
-                'comment' => $task['comment'] ?? null,
+                'name' => self::clean($task['name'] ?? null, self::MAX_TASK_TEXT),
+                'comment' => self::clean($task['comment'] ?? null, self::MAX_TASK_TEXT),
                 'start' => $task['start'] ?? null,
                 'due' => $task['due'] ?? null,
             ])
             ->all();
+    }
+
+    /**
+     * Готує до промпту текст, який писала не наша система: схлопує переноси й
+     * керуючі символи в пробіли й обрізає до стелі.
+     *
+     * Переноси прибираємо не заради краси: у JSON з даними дня рядок у кілька
+     * абзаців візуально виглядає як окремий блок вказівок, а не як назва таски.
+     * Обрізання ж знімає сенс писати в назву довгий текст для моделі — на
+     * справжні назви тасок і домени стелі не впливають.
+     */
+    private static function clean(?string $value, int $limit): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        $value = preg_replace('/[\p{Cc}\p{Cf}\s]+/u', ' ', $value) ?? $value;
+        $value = trim($value);
+
+        return mb_substr($value, 0, $limit);
     }
 }

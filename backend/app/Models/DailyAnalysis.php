@@ -16,6 +16,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
     'model',
     'input_tokens',
     'output_tokens',
+    'context_hash',
     'error_message',
     'generated_at',
     'alerted_at',

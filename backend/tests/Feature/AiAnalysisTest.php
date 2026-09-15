@@ -3,11 +3,13 @@
 namespace Tests\Feature;
 
 use App\Jobs\GenerateDailyAnalysis;
+use App\Models\ActivityEntry;
 use App\Models\DailyAnalysis;
 use App\Models\Employee;
 use App\Models\Report;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
@@ -174,6 +176,119 @@ class AiAnalysisTest extends TestCase
         Queue::assertPushed(
             GenerateDailyAnalysis::class,
             fn (GenerateDailyAnalysis $job) => $job->provider === 'deepseek',
+        );
+    }
+
+    /**
+     * Відповідь DeepSeek у мінімальному вигляді: тут важливий не розбір, а
+     * скільки разів ми взагалі пішли до моделі.
+     */
+    private function fakeDeepseek(): void
+    {
+        config()->set('services.deepseek.key', 'test-key');
+
+        Http::fake(['api.deepseek.com/*' => Http::response([
+            'model' => 'deepseek-chat',
+            'choices' => [[
+                'finish_reason' => 'stop',
+                'message' => ['role' => 'assistant', 'content' => json_encode([
+                    'summary' => 'Звичайний робочий день.',
+                    'focus_assessment' => 'Нормальна зосередженість.',
+                    'task_coverage' => [],
+                    'unclear_activities' => [],
+                    'violations' => [],
+                    'recommendations' => [],
+                ])],
+            ]],
+            'usage' => ['prompt_tokens' => 100, 'completion_tokens' => 50],
+        ])]);
+    }
+
+    private function activity(Employee $employee): void
+    {
+        ActivityEntry::create([
+            'employee_id' => $employee->id,
+            'date' => '2026-07-20',
+            'name' => 'github.com',
+            'productivity' => 'productive',
+            'category' => 'Розробка',
+            'duration_seconds' => 3600,
+        ]);
+    }
+
+    public function test_unchanged_day_is_not_analysed_twice(): void
+    {
+        $this->fakeDeepseek();
+
+        $employee = $this->employee();
+        $this->activity($employee);
+        $report = $this->completedReport($employee);
+
+        GenerateDailyAnalysis::dispatchSync($report, 'deepseek');
+        // Перегенерація звіту за той самий день: дані не змінились, тож платити
+        // за той самий розбір удруге немає за що.
+        GenerateDailyAnalysis::dispatchSync($report, 'deepseek');
+
+        Http::assertSentCount(1);
+
+        $analysis = DailyAnalysis::where('employee_id', $employee->id)->firstOrFail();
+        $this->assertSame(DailyAnalysis::STATUS_COMPLETED, $analysis->status);
+        $this->assertNotNull($analysis->context_hash);
+    }
+
+    public function test_changed_day_is_analysed_again(): void
+    {
+        $this->fakeDeepseek();
+
+        $employee = $this->employee();
+        $this->activity($employee);
+        $report = $this->completedReport($employee);
+
+        GenerateDailyAnalysis::dispatchSync($report, 'deepseek');
+
+        ActivityEntry::create([
+            'employee_id' => $employee->id,
+            'date' => '2026-07-20',
+            'name' => 'youtube.com',
+            'productivity' => 'unproductive',
+            'category' => null,
+            'duration_seconds' => 4800,
+        ]);
+
+        GenerateDailyAnalysis::dispatchSync($report->fresh(), 'deepseek');
+
+        Http::assertSentCount(2);
+    }
+
+    public function test_manual_regeneration_ignores_the_fingerprint(): void
+    {
+        $this->fakeDeepseek();
+
+        $employee = $this->employee();
+        $this->activity($employee);
+        $report = $this->completedReport($employee);
+
+        GenerateDailyAnalysis::dispatchSync($report, 'deepseek');
+        GenerateDailyAnalysis::dispatchSync($report, 'deepseek', force: true);
+
+        Http::assertSentCount(2);
+    }
+
+    public function test_analysis_button_forces_regeneration(): void
+    {
+        Queue::fake();
+
+        $employee = $this->employee();
+        $this->completedReport($employee);
+
+        Sanctum::actingAs($this->admin());
+
+        $this->postJson('/api/analysis', ['employee_id' => $employee->id, 'date' => '2026-07-20'])
+            ->assertStatus(202);
+
+        Queue::assertPushed(
+            GenerateDailyAnalysis::class,
+            fn (GenerateDailyAnalysis $job) => $job->force === true,
         );
     }
 

@@ -80,6 +80,10 @@ class EmployeeMemoryService
                 ->where('source', EmployeeMemory::SOURCE_ADMIN)
                 ->orWhere('checked_at', '>=', $stale))
             ->orderByDesc('occurrences')
+            // Другий ключ сортування — щоб рядки з однаковою кількістю появ
+            // щоразу йшли в тому самому порядку: інакше «ті самі» дані дня
+            // дають різний відбиток (AiAnalysisService::contextHash()).
+            ->orderBy('name')
             ->limit(self::MAX_ITEMS)
             ->get();
 
