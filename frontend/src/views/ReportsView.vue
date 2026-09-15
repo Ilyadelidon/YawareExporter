@@ -6,7 +6,6 @@ import Select from 'primevue/select';
 import client from '../api/client';
 import ActivityBreakdown from '../components/ActivityBreakdown.vue';
 import AiAnalysisPanel from '../components/AiAnalysisPanel.vue';
-import IntegrationsStrip from '../components/IntegrationsStrip.vue';
 import { useAuthStore } from '../stores/auth';
 
 const auth = useAuthStore();
@@ -59,9 +58,9 @@ const isActive = computed(() => ['pending', 'processing'].includes(report.value?
 const isDone = computed(() => report.value?.status === 'completed');
 const isFailed = computed(() => report.value?.status === 'failed');
 
-// Стан інтеграцій приходить зі смуги внизу сторінки; без обох активних
-// інтеграцій формування звіту заблоковане. Адміну смуга не показується,
-// тому для нього ця перевірка не діє.
+// Стан персональних інтеграцій працівника: без активного трекера й таблиці
+// формування звіту заблоковане. Підключають їх на сторінці «Інтеграції»;
+// адмін власних звітів не формує, тому для нього перевірка не діє.
 const integrations = ref({ loaded: false, tracker: false, sheets: false, provider: null });
 const integrationsOk = computed(() => auth.isAdmin || (integrations.value.loaded && integrations.value.tracker && integrations.value.sheets));
 
@@ -80,7 +79,7 @@ const integrationsHint = computed(() => {
   const actions = [];
   if (!integrations.value.tracker) actions.push(`налаштуйте ${trackerLabel.value}`);
   if (!integrations.value.sheets) actions.push('налаштуйте Google Таблицю');
-  return `Щоб формувати звіти, ${actions.join(' і ')} у блоці «Підключені інтеграції» внизу сторінки.`;
+  return `Щоб формувати звіти, ${actions.join(' і ')} на сторінці «Інтеграції».`;
 });
 
 const canGenerate = computed(() => !loading.value && !generating.value && !isActive.value && integrationsOk.value && !viewingOther.value && (!auth.isAdmin || selectedEmployee.value));
@@ -300,16 +299,26 @@ async function downloadReport() {
   }
 }
 
-// Після зміни трекера (підключення, вибір дошки чи акаунта) у смузі інтеграцій
-// підтягуємо таски наживо, якщо звіт готовий і показується не знімок.
-function onTrackerChanged() {
-  if (isDone.value && !tasksSnapshot.value) {
-    loadTasks(toIso(selectedDate.value));
+// Коротка перевірка готовності інтеграцій — деталі й підключення живуть
+// на сторінці «Інтеграції», тут потрібен лише факт «налаштовано / ні».
+async function loadIntegrations() {
+  const provider = auth.user?.task_provider || 'trello';
+  try {
+    const [tracker, google] = await Promise.all([
+      client.get(provider === 'bitrix' ? '/bitrix/status' : '/trello/status'),
+      client.get('/google/status'),
+    ]);
+    integrations.value = {
+      loaded: true,
+      tracker: Boolean(tracker.data.connected),
+      sheets: Boolean(google.data.account_connected && google.data.spreadsheet_id),
+      provider,
+    };
+  } catch {
+    // Стан не отримали — кнопку не блокуємо, бекенд однаково перевірить інтеграції
+    // перед генерацією і поверне зрозумілу помилку.
+    integrations.value = { loaded: true, tracker: true, sheets: true, provider };
   }
-}
-
-function onIntegrationsStatus(payload) {
-  integrations.value = payload;
 }
 
 watch([selectedDate, selectedEmployee], () => {
@@ -319,6 +328,7 @@ watch([selectedDate, selectedEmployee], () => {
 });
 
 onMounted(async () => {
+  if (!auth.isAdmin) loadIntegrations();
   await loadEmployees();
   // для адміна з обраним працівником loadReport уже викликав watch
   if (!auth.isAdmin || !selectedEmployee.value) {
@@ -400,7 +410,10 @@ onUnmounted(() => clearTimeout(pollTimer));
       </div>
       <div>
         <div class="hint-banner-title">Формування звіту недоступне</div>
-        <div class="hint-banner-text">{{ integrationsHint }}</div>
+        <div class="hint-banner-text">
+          {{ integrationsHint }}
+          <router-link class="hint-link" :to="{ name: 'integrations' }">Перейти до інтеграцій</router-link>
+        </div>
       </div>
     </div>
 
@@ -491,8 +504,9 @@ onUnmounted(() => clearTimeout(pollTimer));
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
           </div>
           <div class="hint-banner-text">
-            {{ trackerLabel }} не налаштовано — зробіть це у блоці «Підключені інтеграції»
-            внизу сторінки, щоб таски підтягувались у звіт.
+            {{ trackerLabel }} не налаштовано — підключіть його на сторінці
+            <router-link class="hint-link" :to="{ name: 'integrations' }">Інтеграції</router-link>,
+            щоб таски підтягувались у звіт.
           </div>
         </div>
 
@@ -552,7 +566,10 @@ onUnmounted(() => clearTimeout(pollTimer));
       </template>
       <template v-else-if="integrationsHint">
         <div class="empty-state-title">Підключіть інтеграції</div>
-        <div class="empty-state-text">{{ integrationsHint }}</div>
+        <div class="empty-state-text">
+          {{ integrationsHint }}
+          <router-link class="hint-link" :to="{ name: 'integrations' }">Перейти до інтеграцій</router-link>
+        </div>
       </template>
       <template v-else>
         <div class="empty-state-title">Звіт ще не сформовано</div>
@@ -575,8 +592,6 @@ onUnmounted(() => clearTimeout(pollTimer));
       :date="report.report_date"
       :version="report.generated_at || ''"
     />
-
-    <IntegrationsStrip v-if="!auth.isAdmin" @tracker-changed="onTrackerChanged" @status="onIntegrationsStatus" />
 
   </div>
 </template>
@@ -885,6 +900,18 @@ onUnmounted(() => clearTimeout(pollTimer));
   font-size: 13.5px;
   color: var(--muted);
   max-width: 340px;
+}
+
+/* Посилання на сторінку інтеграцій у підказках про ненастроєні підключення */
+.hint-link {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.hint-link:hover {
+  text-decoration: underline;
 }
 
 .task-list {

@@ -1,12 +1,13 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref, watchEffect } from 'vue';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import Select from 'primevue/select';
 import client from '../api/client';
 import { useAuthStore } from '../stores/auth';
 
-const emit = defineEmits(['tracker-changed', 'status']);
-
 const auth = useAuthStore();
+const route = useRoute();
+const router = useRouter();
 
 // null | 'trello' | 'bitrix' | 'sheets' | 'telegram' — яка інлайн-панель розгорнута
 const managing = ref(null);
@@ -32,17 +33,12 @@ const connected = computed(() => Boolean(status.value?.connected));
 
 const bitrixLoading = ref(true);
 const bitrix = ref(null);
-const portalUsers = ref([]);
-const portalUsersLoading = ref(false);
-const selectedBitrixUserId = ref(null);
-const bitrixSaving = ref(false);
+const bitrixAuthorizing = ref(false);
 const bitrixUnlinking = ref(false);
 
 const bitrixConnected = computed(() => Boolean(bitrix.value?.connected));
 
 const isBitrix = computed(() => provider.value === 'bitrix');
-// «Активно» для смуги — налаштований саме вибраний трекер.
-const trackerConnected = computed(() => (isBitrix.value ? bitrixConnected.value : connected.value));
 // Бітрікс не можна зробити активним, поки адміністратор не підключив портал команди.
 const bitrixSwitchBlocked = computed(() => !bitrix.value?.workspace_connected);
 
@@ -89,14 +85,21 @@ const trelloSubtitle = computed(() => {
 
 const bitrixBadgeLabel = computed(() => {
   if (bitrixConnected.value) return 'Налаштовано';
-  return bitrix.value?.workspace_connected ? 'Акаунт не вибрано' : 'Портал не підключено';
+  return bitrix.value?.workspace_connected ? 'Не авторизовано' : 'Портал не підключено';
 });
+
+// Під заголовком показуємо пошту акаунта, під яким працівник увійшов у портал —
+// саме за нею він упізнає, що підключився правильним акаунтом. Пошти може й не
+// бути (профіль на порталі не заповнений), тоді лишається ім'я.
+const bitrixAccountLabel = computed(
+  () => bitrix.value?.user_email || bitrix.value?.user_name || '',
+);
 
 const bitrixSubtitle = computed(() => {
   if (!bitrix.value?.workspace_connected) return 'Портал команди підключає адміністратор — тоді трекер можна буде вибрати';
   const portal = bitrix.value.portal_url?.replace(/^https:\/\//, '') || 'портал';
-  if (!bitrix.value.user_id) return `${portal} · ваш акаунт на порталі ще не вибрано`;
-  return `${portal} · ${bitrix.value.user_name}`;
+  if (!bitrix.value.user_id) return `${portal} · ви ще не авторизувались на порталі`;
+  return `${portal} · ${bitrixAccountLabel.value}`;
 });
 
 const sheetsBadgeLabel = computed(() => {
@@ -125,7 +128,6 @@ function chooseTracker(next) {
 
 function toggleManage(which) {
   managing.value = managing.value === which ? null : which;
-  if (managing.value === 'bitrix') loadPortalUsers();
 }
 
 async function loadStatus() {
@@ -174,7 +176,6 @@ function onAuthMessage(event) {
   actionMessage.value = `Trello підключено як @${event.data.username}.`;
   loading.value = true;
   loadStatus();
-  emit('tracker-changed');
 }
 
 async function disconnect() {
@@ -188,7 +189,6 @@ async function disconnect() {
     managing.value = null;
     actionMessage.value = 'Trello відключено.';
     await loadStatus();
-    emit('tracker-changed');
   } catch (error) {
     errorMessage.value = error.response?.data?.message || 'Не вдалося відключити Trello.';
   } finally {
@@ -205,7 +205,6 @@ async function selectBoard() {
     const { data } = await client.put('/trello/board', { board_id: selectedBoardId.value });
     actionMessage.value = `Активна дошка — «${data.board.name}».`;
     await loadStatus();
-    emit('tracker-changed');
   } catch (error) {
     errorMessage.value = error.response?.data?.message || 'Не вдалося вибрати дошку.';
   } finally {
@@ -223,7 +222,6 @@ async function createBoard() {
     actionMessage.value = `Дошку «${data.board.name}» створено і зроблено активною.`;
     newBoardName.value = '';
     await loadStatus();
-    emit('tracker-changed');
   } catch (error) {
     errorMessage.value = error.response?.data?.message || 'Не вдалося створити дошку.';
   } finally {
@@ -235,7 +233,6 @@ async function loadBitrixStatus() {
   try {
     const { data } = await client.get('/bitrix/status');
     bitrix.value = data;
-    selectedBitrixUserId.value = data.user_id || null;
   } catch (error) {
     errorMessage.value = error.response?.data?.message || 'Не вдалося отримати стан Бітрікс24.';
   } finally {
@@ -243,36 +240,35 @@ async function loadBitrixStatus() {
   }
 }
 
-// Список користувачів порталу тягнемо лише коли він справді потрібен —
-// це запит до чужого API з жорстким лімітом.
-async function loadPortalUsers() {
-  if (portalUsers.value.length || !bitrix.value?.workspace_connected) return;
-  portalUsersLoading.value = true;
-  try {
-    const { data } = await client.get('/bitrix/users');
-    portalUsers.value = data.data;
-  } catch (error) {
-    errorMessage.value = error.response?.data?.message || 'Не вдалося отримати список користувачів порталу.';
-  } finally {
-    portalUsersLoading.value = false;
-  }
-}
-
-async function selectBitrixUser() {
-  if (!selectedBitrixUserId.value) return;
-  bitrixSaving.value = true;
+// Авторизація в Бітріксі — повний перехід на портал і назад: акаунт визначає
+// сам Бітрікс за виданим токеном, тож вибрати чужий неможливо.
+async function startBitrixAuth() {
+  bitrixAuthorizing.value = true;
   actionMessage.value = '';
   errorMessage.value = '';
   try {
-    const { data } = await client.put('/bitrix/user', { bitrix_user_id: selectedBitrixUserId.value });
-    actionMessage.value = `Ваш акаунт у Бітріксі — ${data.user.name}.`;
-    await loadBitrixStatus();
-    emit('tracker-changed');
+    const { data } = await client.post('/bitrix/oauth/start');
+    window.location.assign(data.url);
   } catch (error) {
-    errorMessage.value = error.response?.data?.message || 'Не вдалося зберегти акаунт Бітрікса.';
-  } finally {
-    bitrixSaving.value = false;
+    errorMessage.value = error.response?.data?.message || 'Не вдалося почати авторизацію в Бітріксі.';
+    bitrixAuthorizing.value = false;
   }
+}
+
+// Повернення з порталу: бекенд редіректить сюди з результатом у query.
+function readBitrixRedirect() {
+  const { bitrix: result, bitrix_message: message, ...rest } = route.query;
+  if (!result) return;
+
+  if (result === 'connected') {
+    actionMessage.value = 'Бітрікс24 підключено — таски беруться з вашого акаунта на порталі.';
+  } else {
+    errorMessage.value = message || 'Не вдалося підключити Бітрікс24.';
+    managing.value = 'bitrix';
+  }
+
+  // Прибираємо параметри, щоб перезавантаження не повторювало повідомлення.
+  router.replace({ query: rest });
 }
 
 async function unlinkBitrixUser() {
@@ -283,9 +279,7 @@ async function unlinkBitrixUser() {
   try {
     const { data } = await client.delete('/bitrix/user');
     actionMessage.value = data.message;
-    selectedBitrixUserId.value = null;
     await loadBitrixStatus();
-    emit('tracker-changed');
   } catch (error) {
     errorMessage.value = error.response?.data?.message || 'Не вдалося відвʼязати акаунт.';
   } finally {
@@ -308,12 +302,10 @@ async function switchProvider(next) {
     actionMessage.value = data.message;
     // Якщо новий трекер ще не готовий до звітів — одразу розгортаємо його налаштування.
     if (data.provider === 'bitrix') {
-      await loadPortalUsers();
       if (!bitrixConnected.value) managing.value = 'bitrix';
     } else if (!connected.value) {
       managing.value = 'trello';
     }
-    emit('tracker-changed');
   } catch (error) {
     errorMessage.value = error.response?.data?.message || 'Не вдалося перемкнути таск-трекер.';
   } finally {
@@ -447,18 +439,9 @@ async function detachSpreadsheet() {
   }
 }
 
-// Батьківська сторінка блокує формування звіту, поки обидві інтеграції не активні.
-watchEffect(() => {
-  emit('status', {
-    loaded: !loading.value && !googleLoading.value && !bitrixLoading.value,
-    tracker: trackerConnected.value,
-    sheets: sheetsActive.value,
-    provider: provider.value,
-  });
-});
-
 onMounted(() => {
   window.addEventListener('message', onAuthMessage);
+  readBitrixRedirect();
   loadStatus();
   loadBitrixStatus();
   loadGoogleStatus();
@@ -473,8 +456,6 @@ onUnmounted(() => {
 
 <template>
   <div class="integrations-strip-wrap">
-    <div class="strip-label">Підключені інтеграції</div>
-
     <div v-if="loading || googleLoading || telegramLoading || bitrixLoading" class="skeleton strip-skeleton"></div>
 
     <template v-else>
@@ -677,34 +658,37 @@ onUnmounted(() => {
             <template v-if="!bitrix?.workspace_connected">
               <p class="panel-note">
                 Портал команди ще не підключено. Робоча область Бітрікс24 одна на всіх —
-                її підключає адміністратор одним вхідним вебхуком у розділі «Працівники».
-                Поки цього не зроблено, вибрати Бітрікс як трекер не можна.
+                її підключає адміністратор у розділі «Працівники». Поки цього не зроблено,
+                вибрати Бітрікс як трекер не можна.
               </p>
             </template>
             <template v-else>
               <div class="field-label">Ваш акаунт на порталі</div>
-              <div class="field-row">
-                <Select
-                  v-model="selectedBitrixUserId"
-                  :options="portalUsers"
-                  option-label="name"
-                  option-value="id"
-                  :loading="portalUsersLoading"
-                  placeholder="Виберіть себе зі списку користувачів порталу"
-                  class="panel-select"
-                />
+              <div v-if="bitrix.user_id" class="field-row">
+                <span class="panel-value">{{ bitrixAccountLabel }}</span>
                 <button
                   class="panel-btn"
                   type="button"
-                  :disabled="bitrixSaving || !selectedBitrixUserId || selectedBitrixUserId === bitrix.user_id"
-                  @click="selectBitrixUser"
+                  :disabled="bitrixAuthorizing"
+                  @click="startBitrixAuth"
                 >
-                  {{ bitrixSaving ? 'Зберігаємо…' : 'Обрати' }}
+                  {{ bitrixAuthorizing ? 'Переходимо…' : 'Оновити доступ' }}
+                </button>
+              </div>
+              <div v-else class="field-row">
+                <button
+                  class="panel-btn"
+                  type="button"
+                  :disabled="bitrixAuthorizing"
+                  @click="startBitrixAuth"
+                >
+                  {{ bitrixAuthorizing ? 'Переходимо на портал…' : 'Увійти через Бітрікс24' }}
                 </button>
               </div>
               <p class="panel-note panel-account-note">
-                У звіт потрапляють таски, де ви — відповідальний, із плановими датами
-                початку й завершення за цей день.
+                Вас перекине на портал команди — увійдіть під своїм акаунтом і підтвердьте
+                доступ. У звіт потраплять таски, де ви відповідальний, із плановими датами
+                за цей день. Чужі таски сервіс не бачить: запити йдуть від вашого імені.
               </p>
               <div class="panel-foot">
                 <a
@@ -905,17 +889,9 @@ onUnmounted(() => {
 }
 
 .integrations-strip-wrap {
-  margin-top: 14px;
+  margin-top: 16px;
   flex-shrink: 0;
-}
-
-.strip-label {
-  font-size: 11.5px;
-  font-weight: 700;
-  color: var(--muted-2);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  margin-bottom: 8px;
+  animation: fadeUp 0.35s ease both;
 }
 
 .strip-skeleton {
@@ -1327,6 +1303,15 @@ onUnmounted(() => {
 
 .panel-account-note {
   margin-bottom: 12px;
+}
+
+/* Ім'я вже підключеного акаунта Бітрікса поруч із кнопкою повторної авторизації. */
+.panel-value {
+  flex: 1;
+  min-width: 0;
+  align-self: center;
+  font-size: 13px;
+  color: var(--text-dim);
 }
 
 .strip-msg {

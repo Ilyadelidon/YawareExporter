@@ -24,6 +24,14 @@ const routes = [
         component: () => import('../views/HistoryView.vue'),
       },
       {
+        // Персональні підключення працівника; адміністратор налаштовує
+        // командні інтеграції у «Налаштуваннях».
+        path: 'integrations',
+        name: 'integrations',
+        component: () => import('../views/IntegrationsView.vue'),
+        meta: { employeeOnly: true },
+      },
+      {
         path: 'timesheet',
         name: 'timesheet',
         component: () => import('../views/TimesheetView.vue'),
@@ -77,6 +85,10 @@ router.beforeEach(async (to) => {
   }
 
   if (to.meta.adminOnly && !auth.isAdmin) {
+    return { name: 'reports' };
+  }
+
+  if (to.meta.employeeOnly && auth.isAdmin) {
     return { name: 'reports' };
   }
 
