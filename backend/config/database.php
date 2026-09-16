@@ -57,11 +57,12 @@ return [
             // упала джоба аналізу 2026-08-08. IMMEDIATE бере лок на запис
             // одразу на BEGIN, де busy_timeout уже чекає своєї черги.
             //
-            // Увага: фреймворк застосовує це лише на PHP >= 8.4 (див.
+            // Увага: сам фреймворк застосовує це лише на PHP >= 8.4 (див.
             // SQLiteConnection::executeBeginTransactionStatement), а прод поки
-            // на 8.3 — там налаштування мовчки не діє. Тому чергу окремо
-            // страхує App\Queue\RetryingDatabaseQueue; прибрати її можна буде
-            // після оновлення PHP.
+            // на 8.3 — там налаштування мовчки не діяло. Тепер режим виконує
+            // App\Database\ImmediateSQLiteConnection незалежно від версії PHP;
+            // чергу додатково страхує App\Queue\RetryingDatabaseQueue. Обидві
+            // милиці можна буде прибрати після оновлення PHP до 8.4.
             'transaction_mode' => env('DB_TRANSACTION_MODE', 'IMMEDIATE'),
         ],
 

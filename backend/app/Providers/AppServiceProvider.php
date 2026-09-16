@@ -2,7 +2,9 @@
 
 namespace App\Providers;
 
+use App\Database\ImmediateSQLiteConnection;
 use App\Queue\RetryingDatabaseConnector;
+use Illuminate\Database\Connection;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\ServiceProvider;
 
@@ -13,7 +15,14 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        // Транзакції SQLite мають починатися як запис, інакше перехід
+        // читання→запис усередині них падає з «database is locked» миттєво,
+        // не чекаючи busy_timeout. Реєструвати треба саме тут: у boot()
+        // зʼєднання вже може бути створене. Див. ImmediateSQLiteConnection.
+        Connection::resolverFor(
+            'sqlite',
+            fn ($connection, $database, $prefix, $config) => new ImmediateSQLiteConnection($connection, $database, $prefix, $config),
+        );
     }
 
     /**
