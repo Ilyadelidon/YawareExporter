@@ -38,6 +38,37 @@ async function savePosition(employee, value) {
   }
 }
 
+// Звільнення відкликає токени працівника одразу, а пароль Yaware стирає,
+// тож питаємо підтвердження. Поновити можна, історія лишається.
+async function dismiss(employee) {
+  if (!window.confirm(
+    `Звільнити ${employee.name}? Він одразу вийде із системи і більше не зайде — навіть якщо лишається в Yaware. `
+    + 'Звіти, активності й Табель за минулі дні збережуться.',
+  )) {
+    return;
+  }
+
+  await toggleDismissal(employee, () => client.post(`/employees/${employee.id}/dismissal`));
+}
+
+async function reinstate(employee) {
+  await toggleDismissal(employee, () => client.delete(`/employees/${employee.id}/dismissal`));
+}
+
+async function toggleDismissal(employee, request) {
+  savingId.value = employee.id;
+  errorMessage.value = '';
+  try {
+    const { data } = await request();
+    employee.dismissed_at = data.data.dismissed_at;
+    employee.active = data.data.active;
+  } catch (error) {
+    errorMessage.value = error.response?.data?.message || 'Не вдалося змінити статус працівника.';
+  } finally {
+    savingId.value = null;
+  }
+}
+
 onMounted(async () => {
   try {
     await loadEmployees();
@@ -88,6 +119,30 @@ onMounted(async () => {
         </Column>
         <Column field="email" header="Пошта" sortable />
         <Column field="yaware_id" header="Yaware ID" />
+        <Column header="Статус">
+          <template #body="{ data }">
+            <span v-if="data.dismissed_at" class="status-dismissed">Звільнений</span>
+            <span v-else>Працює</span>
+          </template>
+        </Column>
+        <Column header="" style="width: 130px">
+          <template #body="{ data }">
+            <button
+              v-if="data.dismissed_at"
+              class="row-btn is-dim"
+              type="button"
+              :disabled="savingId === data.id"
+              @click="reinstate(data)"
+            >Поновити</button>
+            <button
+              v-else
+              class="row-btn"
+              type="button"
+              :disabled="savingId === data.id"
+              @click="dismiss(data)"
+            >Звільнити</button>
+          </template>
+        </Column>
       </DataTable>
     </div>
   </div>
@@ -141,6 +196,37 @@ onMounted(async () => {
 }
 
 .cell-input:disabled {
+  opacity: 0.6;
+}
+
+.status-dismissed {
+  color: var(--muted);
+}
+
+.row-btn {
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  background: transparent;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.12s ease;
+}
+
+.row-btn:hover:not(:disabled) {
+  border-color: #c0392b;
+  color: #c0392b;
+}
+
+.row-btn.is-dim:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.row-btn:disabled {
+  cursor: not-allowed;
   opacity: 0.6;
 }
 </style>

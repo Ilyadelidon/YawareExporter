@@ -31,7 +31,9 @@ Route::post('/telegram/webhook', [TelegramController::class, 'webhook'])->middle
 Route::get('/bitrix/oauth/callback', [BitrixAccountController::class, 'callback'])
     ->middleware('throttle:20,1');
 
-Route::middleware('auth:sanctum')->group(function () {
+// not-dismissed іде поруч із auth:sanctum, а не в групу 'api': там ще не
+// відпрацював гард, і звільненого не було б з чим порівнювати.
+Route::middleware(['auth:sanctum', 'not-dismissed'])->group(function () {
     Route::post('/auth/logout', [AuthController::class, 'logout']);
     Route::get('/auth/me', [AuthController::class, 'me']);
 
@@ -85,6 +87,11 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/employees', [EmployeeController::class, 'index']);
         Route::post('/employees', [EmployeeController::class, 'store']);
         Route::patch('/employees/{employee}', [EmployeeController::class, 'update']);
+
+        // Звільнення — окремою дією, а не полем у update: воно відкликає
+        // токени й стирає креди, тож не має їхати разом із правкою посади.
+        Route::post('/employees/{employee}/dismissal', [EmployeeController::class, 'dismiss']);
+        Route::delete('/employees/{employee}/dismissal', [EmployeeController::class, 'reinstate']);
 
         // Пам'ять AI по працівнику: вердикти, які модель більше не перешукує.
         Route::get('/employees/{employee}/memory', [EmployeeMemoryController::class, 'index']);

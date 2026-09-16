@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Jobs\CheckYawareLogin;
+use App\Models\Employee;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -22,6 +23,17 @@ class AuthController extends Controller
 
         // Email нормалізується, інакше Ilya@… та ilya@… створять двох користувачів.
         $credentials['email'] = mb_strtolower($credentials['email']);
+
+        // Звільнення зачиняє двері раніше за будь-яку перевірку пароля. Інакше
+        // обидва шляхи входу його не помітять: локальний пароль — це копія
+        // яварівського, а перевірка в Yaware ще й підняла б `active` назад.
+        $employee = Employee::where('email', $credentials['email'])->first();
+
+        if ($employee?->isDismissed()) {
+            throw ValidationException::withMessages([
+                'email' => ['Доступ до сервісу закрито. Зверніться до адміністратора.'],
+            ]);
+        }
 
         $user = User::where('email', $credentials['email'])->first();
 

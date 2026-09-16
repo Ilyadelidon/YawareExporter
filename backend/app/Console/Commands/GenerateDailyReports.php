@@ -35,7 +35,14 @@ class GenerateDailyReports extends Command
         $queued = 0;
         $skipped = [];
 
-        foreach (Employee::with('user')->where('active', true)->get() as $employee) {
+        // whereNull поруч із active: `active` міг би підняти вхід у Yaware,
+        // а звільненому звіти не робимо в жодному разі.
+        $employees = Employee::with('user')
+            ->where('active', true)
+            ->whereNull('dismissed_at')
+            ->get();
+
+        foreach ($employees as $employee) {
             if ($reason = $this->skipReason($employee)) {
                 $this->warn("{$employee->name} (#{$employee->id}): пропущено — {$reason}");
                 $skipped[] = "{$employee->name} (#{$employee->id}): {$reason}";

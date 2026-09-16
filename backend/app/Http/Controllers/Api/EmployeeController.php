@@ -50,4 +50,26 @@ class EmployeeController extends Controller
 
         return response()->json(['data' => $employee]);
     }
+
+    /**
+     * Звільнення: відкликає токени, стирає креди Yaware і зачиняє двері доти,
+     * доки працівника не поновлять. Історію не чіпає.
+     */
+    public function dismiss(Employee $employee): JsonResponse
+    {
+        $employee->dismiss();
+
+        return response()->json(['data' => $employee->fresh()]);
+    }
+
+    /**
+     * Поновлення звільненого. Доступ повертається не одразу: щоб зайти,
+     * людина має знову підтвердити себе в Yaware — як і будь-хто інший.
+     */
+    public function reinstate(Employee $employee): JsonResponse
+    {
+        $employee->reinstate();
+
+        return response()->json(['data' => $employee->fresh()]);
+    }
 }

@@ -75,6 +75,18 @@ class CheckYawareLogin implements ShouldBeEncrypted, ShouldQueue
             return;
         }
 
+        // Yaware пустив — але в нас людину могли звільнити, поки джоба стояла в
+        // черзі. Без цієї перевірки `updateOrCreate` нижче підняв би `active`
+        // назад і видав токен.
+        if (Employee::where('email', $this->email)->first()?->isDismissed()) {
+            self::storeResult($this->checkId, [
+                'status' => 'failed',
+                'message' => 'Доступ до сервісу закрито. Зверніться до адміністратора.',
+            ]);
+
+            return;
+        }
+
         $employeeName = $result['employee']['name'] ?? '';
 
         $user = User::updateOrCreate(
