@@ -1,0 +1,338 @@
+/*
+ * Спільна мова сторінок з інтеграціями й налаштуваннями: секції, кнопки,
+ * поля «підпис ліворуч — контрол праворуч» і небезпечна дія з підтвердженням.
+ * Усе під .int-ui, щоб короткі імена класів (.btn, .input) не витікали на
+ * решту застосунку. Рядок інтеграції — у components/IntegrationRow.vue.
+ */
+
+.int-ui {
+  --control-line: #d9e0e5;
+}
+
+/* ── Секції ── */
+
+.int-ui .section-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 24px;
+  margin-bottom: 8px;
+  padding: 0 2px;
+}
+
+.int-ui .section-title {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--ink);
+  margin: 0;
+}
+
+.int-ui .section-desc {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin: 2px 0 0;
+}
+
+.int-ui .int-list {
+  min-width: 0;
+}
+
+.int-ui .row-skeleton {
+  padding: 13px 18px;
+}
+
+.int-ui .row-skeleton + .row-skeleton,
+.int-ui .row-skeleton + .int-row,
+.int-ui .int-row + .row-skeleton {
+  border-top: 1px solid var(--line);
+}
+
+.int-ui .row-skeleton .skeleton {
+  height: 34px;
+}
+
+/* ── Кнопки ── */
+
+.int-ui .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 12px;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.int-ui .btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.int-ui .btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.int-ui .btn-primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.int-ui .btn-primary:hover:not(:disabled) {
+  background: #118779;
+}
+
+.int-ui .btn-secondary {
+  background: var(--surface);
+  color: #3d4347;
+  border-color: var(--control-line);
+}
+
+.int-ui .btn-secondary:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.int-ui .btn-danger {
+  background: #c2402f;
+  color: #fff;
+}
+
+.int-ui .btn-danger:hover:not(:disabled) {
+  background: #a83626;
+}
+
+.int-ui .btn-danger-ghost {
+  background: none;
+  color: #c2402f;
+  padding: 0 8px;
+  margin-left: -8px;
+}
+
+.int-ui .btn-danger-ghost:hover:not(:disabled) {
+  background: #faeeec;
+}
+
+/* Текстова дія всередині списку (Змінити / Прибрати) */
+.int-ui .btn-link {
+  min-height: 26px;
+  padding: 0 6px;
+  background: none;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+.int-ui .btn-link:hover:not(:disabled) {
+  color: var(--accent);
+  background: var(--line);
+}
+
+.int-ui .btn-link.is-danger:hover:not(:disabled) {
+  color: #c2402f;
+  background: #faeeec;
+}
+
+.int-ui .chevron {
+  transition: transform 0.18s cubic-bezier(0.25, 1, 0.5, 1);
+}
+
+.int-ui .btn[aria-expanded='true'] .chevron {
+  transform: rotate(180deg);
+}
+
+.int-ui .spinner {
+  animation: spin 0.8s linear infinite;
+}
+
+/* ── Поля налаштувань: підпис ліворуч, контрол праворуч ── */
+
+.int-ui .fields {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.int-ui .field {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr);
+  gap: 6px 16px;
+  align-items: start;
+}
+
+.int-ui .field-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-dim);
+  padding-top: 8px;
+}
+
+.int-ui .field-control {
+  min-width: 0;
+  max-width: 540px;
+}
+
+.int-ui .control-row {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.int-ui .control-grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.int-ui .field-value {
+  display: inline-block;
+  font-size: 13px;
+  font-weight: 600;
+  color: #2b2f33;
+  padding-top: 8px;
+  overflow-wrap: anywhere;
+}
+
+.int-ui .control-row .field-value {
+  padding-top: 0;
+  align-self: center;
+}
+
+.int-ui .input {
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid var(--control-line);
+  padding: 7px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  color: #2b2f33;
+  background: var(--surface);
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.int-ui .input::placeholder {
+  color: var(--muted-2);
+}
+
+.int-ui .input:hover {
+  border-color: #c4cdd3;
+}
+
+.int-ui .input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.int-ui .input:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.int-ui .field-hint {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+  margin: 6px 0 0;
+  max-width: 68ch;
+}
+
+.int-ui .field-hint strong {
+  color: var(--text-dim);
+}
+
+.int-ui .field-error {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: #c2402f;
+  margin: 0;
+  padding-top: 7px;
+}
+
+.int-ui .field-link {
+  display: block;
+  width: fit-content;
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.int-ui .field-link.is-inline {
+  margin-top: 0;
+  padding-top: 8px;
+}
+
+.int-ui .field-link:hover {
+  text-decoration: underline;
+}
+
+.int-ui .field-list {
+  margin: 0;
+  padding: 7px 0 0 16px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+
+.int-ui .panel-hint.is-top {
+  font-size: 12.5px;
+  color: var(--text-dim);
+  background: var(--line);
+  padding: 8px 10px;
+  margin: 0 0 16px;
+}
+
+/* ── Небезпечна дія: окремо внизу, з підтвердженням на місці ── */
+
+.int-ui .danger {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid #e8edf0;
+}
+
+.int-ui .danger-text {
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+.int-ui .danger-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+@media (max-width: 760px) {
+  .int-ui .section-head {
+    align-items: flex-start;
+  }
+
+  .int-ui .field {
+    grid-template-columns: 1fr;
+  }
+
+  .int-ui .field-label {
+    padding-top: 0;
+  }
+
+  .int-ui .field-value,
+  .int-ui .field-link.is-inline,
+  .int-ui .field-list,
+  .int-ui .field-error {
+    padding-top: 0;
+  }
+
+  .int-ui .danger-actions {
+    margin-left: 0;
+  }
+}

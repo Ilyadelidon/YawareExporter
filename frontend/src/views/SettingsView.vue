@@ -14,7 +14,7 @@ import BitrixWorkspacePanel from '../components/BitrixWorkspacePanel.vue';
         </div>
         <div>
           <div class="page-head-title">Налаштування</div>
-          <div class="page-head-subtitle">Командні інтеграції та сповіщення</div>
+          <div class="page-head-subtitle">Таск-трекер команди та сповіщення керівнику</div>
         </div>
       </div>
     </div>
@@ -36,6 +36,9 @@ import BitrixWorkspacePanel from '../components/BitrixWorkspacePanel.vue';
 }
 
 .settings-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
   margin-top: 16px;
   animation: fadeUp 0.35s ease both;
 }
