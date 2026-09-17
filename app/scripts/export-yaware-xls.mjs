@@ -1616,7 +1616,7 @@ async function saveCombinedHtmlExcel(summaryPayload, dayReportPayload, downloade
       : downloadedFileContentLatin1;
   const primaryRows = extractWorksheetTableRows(downloadedFileContent);
   if (primaryRows.length === 0) {
-    throw new Error(EMPTY_DAY_MESSAGE);
+    throw emptyDayError();
   }
 
   const secondaryRows = buildSecondaryRows(summaryPayload, dayReportPayload, apiReportDate, reportEmployeeName, idleActivitiesRows);
@@ -2648,6 +2648,13 @@ async function runCombinePythonScript(pythonScriptPath, combinedExcelPath, downl
 
 const EMPTY_DAY_MESSAGE = 'За обрану дату в Yaware немає даних активності, тому звіт не сформовано. Оберіть інший день.';
 
+// Порожній день — остаточна відповідь Yaware, а не збій: повтор не допоможе.
+function emptyDayError() {
+  const error = new Error(EMPTY_DAY_MESSAGE);
+  error.code = 'EMPTY_DAY';
+  return error;
+}
+
 async function saveCombinedExcel(summaryPayload, dayReportPayload, downloadedFilePath, outputDirectory, apiReportDate, reportEmployeeName = '', idleActivitiesRows = null) {
   const fileExtension = path.extname(downloadedFilePath).toLowerCase();
 
@@ -2656,7 +2663,7 @@ async function saveCombinedExcel(summaryPayload, dayReportPayload, downloadedFil
     // не є zip-архівом — Python-скрипт падав би на zipfile.BadZipFile.
     const fileHeader = await fs.readFile(downloadedFilePath);
     if (fileHeader.length < 4 || fileHeader[0] !== 0x50 || fileHeader[1] !== 0x4b) {
-      throw new Error(EMPTY_DAY_MESSAGE);
+      throw emptyDayError();
     }
     return saveCombinedXlsx(summaryPayload, dayReportPayload, downloadedFilePath, outputDirectory, apiReportDate, reportEmployeeName, idleActivitiesRows);
   }
@@ -3504,6 +3511,9 @@ try {
   output.write(`${JSON.stringify({
     status: 'error',
     message: error?.message || 'Невідома помилка генерації звіту.',
+    // Бекенд за кодом вирішує, чи варто пробувати ще раз: неправильні креди
+    // чи порожній день повтор не виправить, а мережевий збій — цілком.
+    code: typeof error?.code === 'string' ? error.code : null,
     screenshot: screenshotPath,
   })}\n`);
   process.exitCode = 1;

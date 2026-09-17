@@ -94,6 +94,10 @@ Chromium з кешу Playwright.
 | yaware-queue-default | `php artisan queue:work --queue=default --timeout=700 --tries=1 --sleep=3` |
 | yaware-queue-analysis | `php artisan queue:work --queue=analysis --timeout=640 --tries=1 --sleep=5` |
 
+`--tries=1` — лише значення за замовчуванням: `GenerateYawareReport` задає
+`$tries = 2` сам і повторює звіт через 10 хв, якщо воркер упав не через
+креди, права чи порожній день.
+
 `Restart=always`, `User=www-data` (той самий користувач, під яким ставили
 Chromium). Після деплою нового коду — `systemctl restart` усіх трьох.
 

@@ -23,7 +23,21 @@ class GenerateYawareReport implements ShouldQueue
 
     public int $timeout = 660;
 
-    public int $tries = 1;
+    // Друга спроба — лише для збоїв, які повтор може виправити (мережа, Yaware
+    // лежить, Chromium впав). Без неї один такий збій о 07:00 губив звіт до
+    // наступного ранку. Решту відмов handle() фіксує одразу, не чекаючи.
+    public int $tries = 2;
+
+    // Пауза перед повтором: короткий збій Yaware встигає минути, а решта
+    // ранкової черги тим часом іде далі.
+    public const RETRY_DELAY_SECONDS = 600;
+
+    // Коди воркера, за яких повтор дасть той самий результат.
+    private const PERMANENT_WORKER_ERRORS = [
+        'INVALID_CREDENTIALS',
+        'REPORTS_PAGE_UNAVAILABLE',
+        'EMPTY_DAY',
+    ];
 
     public function __construct(public Report $report) {}
 
@@ -83,9 +97,25 @@ class GenerateYawareReport implements ShouldQueue
             $process->mustRun();
             $result = $this->parseWorkerResult($process->getOutput());
         } catch (Throwable $exception) {
+            $workerError = $this->workerError($report, $process);
+            $errorMessage = $workerError['message'] ?? $this->buildErrorMessage($exception, $process);
+
+            if ($this->shouldRetry($workerError['code'] ?? null)) {
+                Log::warning("Звіт #{$report->id} не згенерувався з {$this->attempts()}-ї спроби, повтор через ".self::RETRY_DELAY_SECONDS." с: {$errorMessage}");
+
+                // Працівнику поки не пишемо: звіт ще може вийти з другої спроби.
+                $report->update([
+                    'status' => Report::STATUS_PENDING,
+                    'error_message' => null,
+                ]);
+                $this->release(self::RETRY_DELAY_SECONDS);
+
+                return;
+            }
+
             $report->update([
                 'status' => Report::STATUS_FAILED,
-                'error_message' => $this->workerErrorMessage($report, $process) ?? $this->buildErrorMessage($exception, $process),
+                'error_message' => $errorMessage,
             ]);
             $this->notifyFailure($report);
 
@@ -336,12 +366,25 @@ class GenerateYawareReport implements ShouldQueue
     }
 
     /**
-     * Людське повідомлення від самого воркера: при падінні він віддає останнім
-     * рядком stdout JSON {status: 'error', message, screenshot}; скріншот
+     * Повтор має сенс, лише поки є спроби і воркер не повідомив про відмову,
+     * яку повтор не змінить. Падіння без коду (таймаут, крах процесу, битий
+     * вивід) вважаємо тимчасовим.
+     */
+    private function shouldRetry(?string $workerErrorCode): bool
+    {
+        return $this->attempts() < $this->tries
+            && ! in_array($workerErrorCode, self::PERMANENT_WORKER_ERRORS, true);
+    }
+
+    /**
+     * Помилка від самого воркера: при падінні він віддає останнім рядком
+     * stdout JSON {status: 'error', message, code, screenshot}; скріншот
      * сторінки лишається на диску в теці звіту і в UI не показується.
      * null — воркер упав без структурованої помилки (fallback на stderr).
+     *
+     * @return array{message: string, code: ?string}|null
      */
-    private function workerErrorMessage(Report $report, Process $process): ?string
+    private function workerError(Report $report, Process $process): ?array
     {
         $lines = array_values(array_filter(array_map('trim', explode("\n", $process->getOutput()))));
         $result = $lines ? json_decode((string) end($lines), true) : null;
@@ -355,7 +398,10 @@ class GenerateYawareReport implements ShouldQueue
             'stderr' => mb_substr(trim($process->getErrorOutput()), -1500),
         ]);
 
-        return $result['message'];
+        return [
+            'message' => $result['message'],
+            'code' => is_string($result['code'] ?? null) ? $result['code'] : null,
+        ];
     }
 
     private function buildErrorMessage(Throwable $exception, Process $process): string

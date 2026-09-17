@@ -40,7 +40,7 @@ Route::middleware(['auth:sanctum', 'not-dismissed'])->group(function () {
     Route::get('/reports', [ReportController::class, 'index']);
     Route::get('/reports/{report}', [ReportController::class, 'show']);
     Route::get('/reports/{report}/download', [ReportController::class, 'download']);
-    Route::post('/reports', [ReportController::class, 'store']);
+    Route::post('/reports', [ReportController::class, 'store'])->middleware('throttle:reports');
 
     // Таски за день з активного трекера користувача (Trello або Бітрікс24).
     Route::get('/tasks', [TaskController::class, 'index']);

@@ -98,7 +98,11 @@ class ReportController extends Controller
         abort_unless($file, 404, 'Файл звіту ще не згенеровано.');
 
         $absolutePath = storage_path('app/'.$file->path);
-        abort_unless(is_file($absolutePath), 404, 'Файл звіту не знайдено на диску.');
+        abort_unless(
+            is_file($absolutePath),
+            404,
+            'Файлу звіту вже немає на диску: файли старші за '.config('yaware.report_files_retention_days').' дн. видаляються. Перегенеруйте звіт, щоб отримати файл.',
+        );
 
         return response()->download($absolutePath, $file->original_name);
     }

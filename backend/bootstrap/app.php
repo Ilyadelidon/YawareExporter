@@ -19,6 +19,13 @@ return Application::configure(basePath: dirname(__DIR__))
             'admin' => EnsureUserIsAdmin::class,
             'not-dismissed' => EnsureEmployeeIsNotDismissed::class,
         ]);
+
+        // Сторінки входу на бекенді немає — вхід живе в SPA. Без цього гість
+        // без заголовка Accept: application/json отримував 500 «Route [login]
+        // not defined» замість 401.
+        $middleware->redirectGuestsTo(
+            fn (Request $request) => $request->is('api/*') ? null : '/',
+        );
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(
