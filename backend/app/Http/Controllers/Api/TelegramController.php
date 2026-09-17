@@ -76,8 +76,17 @@ class TelegramController extends Controller
         }
 
         $code = trim(substr($text, strlen('/start')));
-        $userId = $code !== '' ? Cache::pull("telegram-link:{$code}") : null;
-        $user = $userId ? User::find($userId) : null;
+        $link = $code !== '' ? Cache::pull("telegram-link:{$code}") : null;
+
+        // Технічний чат адміністратора — окремий вид привʼязки (див.
+        // OpsTelegramController); звичайне посилання — просто id користувача.
+        if (is_array($link) && ($link['target'] ?? null) === 'ops') {
+            $this->linkOpsChat((string) $chatId, User::find($link['user_id'] ?? null), $telegram);
+
+            return;
+        }
+
+        $user = is_scalar($link) ? User::find($link) : null;
 
         if (! $user) {
             $telegram->sendMessage(
@@ -93,6 +102,24 @@ class TelegramController extends Controller
         $telegram->sendMessage(
             (string) $chatId,
             "✅ Telegram підключено до акаунта «{$user->name}». Сюди приходитимуть сповіщення про згенеровані звіти і незаповнені таски.",
+        );
+    }
+
+    private function linkOpsChat(string $chatId, ?User $user, TelegramService $telegram): void
+    {
+        // Роль могли зняти, поки посилання ще жило, — службові тривоги
+        // колишньому адміністратору не належать.
+        if (! $user?->isAdmin()) {
+            $telegram->sendMessage($chatId, 'Посилання недійсне: технічні сповіщення може підключити лише адміністратор.');
+
+            return;
+        }
+
+        $user->forceFill(['ops_telegram_chat_id' => $chatId])->save();
+
+        $telegram->sendMessage(
+            $chatId,
+            '🛠 Технічні сповіщення TeamReporter підключено. Сюди приходитимуть підсумок ранкової генерації звітів і тривоги про збої сервісу.',
         );
     }
 }

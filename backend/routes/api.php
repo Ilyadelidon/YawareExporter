@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\BitrixAccountController;
 use App\Http\Controllers\Api\EmployeeController;
 use App\Http\Controllers\Api\EmployeeMemoryController;
 use App\Http\Controllers\Api\GoogleSpreadsheetController;
+use App\Http\Controllers\Api\OpsTelegramController;
 use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\StatsController;
 use App\Http\Controllers\Api\TaskController;
@@ -82,6 +83,12 @@ Route::middleware(['auth:sanctum', 'not-dismissed'])->group(function () {
         // Пошти, на які керівнику йдуть листи про критичні порушення.
         Route::get('/alerts/emails', [AlertSettingsController::class, 'show']);
         Route::put('/alerts/emails', [AlertSettingsController::class, 'update']);
+
+        // Технічний Telegram адміністратора: ранковий підсумок і тривоги монітора.
+        Route::get('/alerts/telegram', [OpsTelegramController::class, 'status']);
+        Route::post('/alerts/telegram/link', [OpsTelegramController::class, 'link']);
+        Route::delete('/alerts/telegram', [OpsTelegramController::class, 'unlink']);
+        Route::post('/alerts/telegram/test', [OpsTelegramController::class, 'test'])->middleware('throttle:5,1');
 
         Route::get('/timesheet', [TimesheetController::class, 'index']);
         Route::get('/employees', [EmployeeController::class, 'index']);

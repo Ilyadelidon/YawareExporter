@@ -3,6 +3,7 @@
 // налаштовуються один раз на всю команду, а не по кожному працівнику.
 import AlertEmailPanel from '../components/AlertEmailPanel.vue';
 import BitrixWorkspacePanel from '../components/BitrixWorkspacePanel.vue';
+import OpsTelegramPanel from '../components/OpsTelegramPanel.vue';
 </script>
 
 <template>
@@ -14,7 +15,7 @@ import BitrixWorkspacePanel from '../components/BitrixWorkspacePanel.vue';
         </div>
         <div>
           <div class="page-head-title">Налаштування</div>
-          <div class="page-head-subtitle">Таск-трекер команди та сповіщення керівнику</div>
+          <div class="page-head-subtitle">Таск-трекер команди, сповіщення керівнику й технічні сповіщення</div>
         </div>
       </div>
     </div>
@@ -25,6 +26,9 @@ import BitrixWorkspacePanel from '../components/BitrixWorkspacePanel.vue';
 
       <!-- Куди керівнику писати про критичні порушення з AI-розбору дня -->
       <AlertEmailPanel />
+
+      <!-- Службовий Telegram адміністратора: збої і ранковий прогін -->
+      <OpsTelegramPanel />
     </div>
   </div>
 </template>

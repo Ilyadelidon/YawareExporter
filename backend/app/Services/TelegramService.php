@@ -66,20 +66,51 @@ class TelegramService
     }
 
     /**
-     * Технічне сповіщення розробнику (OPS_TELEGRAM_EMAIL): стан ранкової
-     * автогенерації, збої планувальника. Працівникам такі повідомлення не
-     * йдуть — це службовий канал на одну людину.
+     * Технічне сповіщення: стан ранкової автогенерації, збої планувальника.
+     * Отримують адміністратори, які підключили технічний Telegram у
+     * налаштуваннях, і розробник з OPS_TELEGRAM_EMAIL (його особистий чат).
+     * Працівникам такі повідомлення не йдуть.
+     *
+     * Один чат отримує повідомлення один раз, навіть якщо він прописаний в
+     * обох місцях. Збій відправки одному адресату не зупиняє решту.
+     */
+    public function notifyOps(string $text, ?string $parseMode = null): void
+    {
+        $chatIds = User::where('role', User::ROLE_ADMIN)
+            ->whereNotNull('ops_telegram_chat_id')
+            ->pluck('ops_telegram_chat_id')
+            ->all();
+
+        if ($developerChatId = $this->opsEmailChatId()) {
+            $chatIds[] = $developerChatId;
+        }
+
+        if (! $this->isConfigured()) {
+            return;
+        }
+
+        foreach (array_unique($chatIds) as $chatId) {
+            try {
+                $this->sendMessage((string) $chatId, $text, $parseMode);
+            } catch (Throwable $exception) {
+                Log::warning("Технічне Telegram-сповіщення в чат {$chatId} не надіслано: {$exception->getMessage()}");
+            }
+        }
+    }
+
+    /**
+     * Особистий чат розробника з OPS_TELEGRAM_EMAIL.
      *
      * Мовчазна відмова тут неприпустима: якщо адресата не знайдено або в нього
      * не привʼязаний Telegram, у лог іде попередження — інакше сповіщення про
      * збої самі зникли б непоміченими.
      */
-    public function notifyOps(string $text, ?string $parseMode = null): void
+    private function opsEmailChatId(): ?string
     {
         $email = trim((string) config('services.telegram.ops_email'));
 
         if ($email === '') {
-            return;
+            return null;
         }
 
         // Пошта в базі зберігається так, як її віддав Yaware, тож порівнюємо
@@ -89,16 +120,16 @@ class TelegramService
         if (! $user) {
             Log::warning("OPS_TELEGRAM_EMAIL={$email}: користувача з такою поштою немає — технічне сповіщення не надіслано.");
 
-            return;
+            return null;
         }
 
         if (! $user->telegram_chat_id) {
             Log::warning("OPS_TELEGRAM_EMAIL={$email}: Telegram не привʼязано — технічне сповіщення не надіслано.");
 
-            return;
+            return null;
         }
 
-        $this->notify($user, $text, $parseMode);
+        return $user->telegram_chat_id;
     }
 
     /**

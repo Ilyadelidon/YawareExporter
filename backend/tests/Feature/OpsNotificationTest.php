@@ -13,7 +13,8 @@ use Tests\TestCase;
 
 /**
  * Технічні сповіщення розробнику: підсумок ранкової автогенерації і сигнал
- * про падіння планувальника. Ідуть одній людині з OPS_TELEGRAM_EMAIL.
+ * про падіння планувальника. Тут — адресат з OPS_TELEGRAM_EMAIL; технічний
+ * чат адміністраторів перевіряє OpsTelegramTest.
  */
 class OpsNotificationTest extends TestCase
 {
