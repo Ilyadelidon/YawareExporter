@@ -1,6 +1,6 @@
 <script setup>
 // Табель (лише адмін): матриця «працівник × дні місяця», у клітинках —
-// фактично відпрацьований час із історичної БД, без норм і підсвіток.
+// робочий час (без непродуктивного) із історичної БД, без норм і підсвіток.
 import { onMounted, ref, watch } from 'vue';
 import DatePicker from 'primevue/datepicker';
 import Message from 'primevue/message';
@@ -55,7 +55,7 @@ onMounted(load);
         </div>
         <div>
           <div class="page-head-title">Табель</div>
-          <div class="page-head-subtitle">Фактично відпрацьований час по працівниках за місяць</div>
+          <div class="page-head-subtitle">Робочий час по працівниках за місяць (без непродуктивного)</div>
         </div>
       </div>
       <div class="page-head-actions">

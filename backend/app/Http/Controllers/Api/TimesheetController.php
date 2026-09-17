@@ -12,8 +12,8 @@ use Illuminate\Http\Request;
 class TimesheetController extends Controller
 {
     /**
-     * Табель за місяць: матриця «працівник × дні» з фактично відпрацьованим
-     * часом із daily_stats. Показуються активні працівники плюс ті, у кого
+     * Табель за місяць: матриця «працівник × дні» з робочим часом
+     * (без непродуктивного) із daily_stats. Показуються активні працівники плюс ті, у кого
      * є дані за місяць (навіть якщо їх уже деактивували).
      */
     public function index(Request $request): JsonResponse
@@ -40,7 +40,10 @@ class TimesheetController extends Controller
 
         $rows = $employees->map(function (Employee $employee) use ($stats) {
             $days = ($stats[$employee->id] ?? collect())
-                ->mapWithKeys(fn (DailyStat $stat) => [$stat->date->toDateString() => (int) $stat->total_seconds]);
+                // У табель іде лише робочий час: непродуктивний віднімається.
+                ->mapWithKeys(fn (DailyStat $stat) => [
+                    $stat->date->toDateString() => max(0, (int) $stat->total_seconds - (int) $stat->unproductive_seconds),
+                ]);
 
             return [
                 'id' => $employee->id,

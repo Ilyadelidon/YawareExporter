@@ -136,4 +136,32 @@ class DateFilterTest extends TestCase
             ->assertJsonPath('data.0.total_seconds', 5000)
             ->assertJsonPath('data.0.days_worked', 2);
     }
+
+    public function test_timesheet_excludes_unproductive_time(): void
+    {
+        $employee = $this->employee();
+        DailyStat::create([
+            'employee_id' => $employee->id,
+            'date' => '2026-07-10',
+            'productive_seconds' => 3000,
+            'neutral_seconds' => 600,
+            'unproductive_seconds' => 900,
+            'total_seconds' => 4500,
+        ]);
+        // День, коли був лише непродуктивний час, відпрацьованим не рахується.
+        DailyStat::create([
+            'employee_id' => $employee->id,
+            'date' => '2026-07-11',
+            'unproductive_seconds' => 1200,
+            'total_seconds' => 1200,
+        ]);
+
+        Sanctum::actingAs($this->admin());
+
+        $this->getJson('/api/timesheet?month=2026-07')
+            ->assertOk()
+            ->assertJsonPath('data.0.days.2026-07-10', 3600)
+            ->assertJsonPath('data.0.total_seconds', 3600)
+            ->assertJsonPath('data.0.days_worked', 1);
+    }
 }
