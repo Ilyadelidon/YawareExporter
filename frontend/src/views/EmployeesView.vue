@@ -42,7 +42,7 @@ async function savePosition(employee, value) {
 // тож питаємо підтвердження. Поновити можна, історія лишається.
 async function dismiss(employee) {
   if (!window.confirm(
-    `Звільнити ${employee.name}? Він одразу вийде із системи і більше не зайде — навіть якщо лишається в Yaware. `
+    `Видалити ${employee.name} з системи? Він одразу вийде із системи і більше не зайде — навіть якщо лишається в Yaware. `
     + 'Звіти, активності й Табель за минулі дні збережуться.',
   )) {
     return;
@@ -125,7 +125,7 @@ onMounted(async () => {
             <span v-else>Працює</span>
           </template>
         </Column>
-        <Column header="" style="width: 130px">
+        <Column header="" style="width: 170px">
           <template #body="{ data }">
             <button
               v-if="data.dismissed_at"
@@ -140,7 +140,7 @@ onMounted(async () => {
               type="button"
               :disabled="savingId === data.id"
               @click="dismiss(data)"
-            >Звільнити</button>
+            >Видалити з системи</button>
           </template>
         </Column>
       </DataTable>
