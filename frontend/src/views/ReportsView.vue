@@ -57,6 +57,9 @@ const TIME_KEYS = {
 const isActive = computed(() => ['pending', 'processing'].includes(report.value?.status));
 const isDone = computed(() => report.value?.status === 'completed');
 const isFailed = computed(() => report.value?.status === 'failed');
+// Звіт свідомо не сформовано: у дні лишився час поза тасками. Це не збій,
+// тож показуємо не помилку, а що саме треба поправити в трекері.
+const isBlocked = computed(() => report.value?.status === 'blocked');
 
 // Стан персональних інтеграцій працівника: без активного трекера й таблиці
 // формування звіту заблоковане. Підключають їх на сторінці «Інтеграції»;
@@ -403,6 +406,10 @@ onUnmounted(() => clearTimeout(pollTimer));
       <pre class="error-details">{{ report.error_message }}</pre>
     </Message>
 
+    <Message v-else-if="isBlocked && report.error_message" severity="warn" :closable="false" class="page-message">
+      {{ report.error_message }}
+    </Message>
+
     <!-- Коли звіт уже показано, пустого стану немає — підказуємо банером -->
     <div v-if="integrationsHint && isDone" class="hint-banner page-message">
       <div class="hint-banner-icon">
@@ -559,6 +566,10 @@ onUnmounted(() => clearTimeout(pollTimer));
       <template v-else-if="isFailed">
         <div class="empty-state-title">Не вдалося сформувати звіт</div>
         <div class="empty-state-text">Спробуйте натиснути «Сформувати звіт» ще раз або перевірте повідомлення про помилку вище</div>
+      </template>
+      <template v-else-if="isBlocked">
+        <div class="empty-state-title">Є час поза тасками</div>
+        <div class="empty-state-text">Додайте у {{ trackerLabel }} таски з часом початку й завершення так, щоб вони покрили весь робочий день, і натисніть «Сформувати звіт» ще раз</div>
       </template>
       <template v-else-if="viewingOther">
         <div class="empty-state-title">Звіту за цю дату немає</div>

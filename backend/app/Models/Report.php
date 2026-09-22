@@ -18,6 +18,12 @@ class Report extends Model
 
     public const STATUS_FAILED = 'failed';
 
+    // Звіт свідомо не сформовано: у дні лишився час поза тасками, тож
+    // працівник має спершу поправити таски в трекері. Це не збій генерації —
+    // ops-моніторинг такі звіти не рахує як упалі, а ранковий прогін
+    // наступного дня їх не переганяє.
+    public const STATUS_BLOCKED = 'blocked';
+
     protected function casts(): array
     {
         return [

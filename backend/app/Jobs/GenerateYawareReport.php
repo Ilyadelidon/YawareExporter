@@ -122,14 +122,24 @@ class GenerateYawareReport implements ShouldQueue
             return;
         }
 
+        $history = $this->loadHistory($report, $result);
+
+        // Час, який не належить жодній тасці, — привід не віддавати звіт
+        // узагалі: такий звіт однаково довелось би переробляти, а поки він
+        // лежить «готовий», ніхто цього не помічає. Працівник дізнається
+        // причину з Telegram і формує звіт заново, поправивши таски.
+        if ($blockReason = $this->coverageBlockReason($tasks, $result, $history)) {
+            $this->blockReport($report, $tasks, $blockReason);
+
+            return;
+        }
+
         ReportFile::create([
             'report_id' => $report->id,
             'type' => 'combined_excel',
             'path' => 'reports/'.$report->id.'/'.basename($result['file']),
             'original_name' => basename($result['file']),
         ]);
-
-        $history = $this->loadHistory($report, $result);
 
         // День без активності в Yaware (відпустка, лікарняний): в історію і
         // Google Таблицю нічого не пишемо, Telegram мовчить — інакше кожен
@@ -215,6 +225,82 @@ class GenerateYawareReport implements ShouldQueue
         }
 
         app(TelegramService::class)->notify($report->employee?->user, implode("\n", $lines), 'HTML');
+    }
+
+    /**
+     * Причина не віддавати звіт: у дні є час поза тасками. Текст готовий до
+     * показу працівнику; null — звіт іде звичайним шляхом.
+     *
+     * Рахує розподіл воркер (колонка «Поза тасками» в Excel), тож короткі
+     * залишки між тасками сюди не доходять — вони вже приклеєні до сусідньої
+     * таски тим самим порогом, що й у файлі.
+     */
+    private function coverageBlockReason(?array $tasks, array $result, ?array $history): ?string
+    {
+        // Тасок не отримано взагалі (трекер не налаштований або впав) — це не
+        // провина працівника: звіт іде далі з попередженням, як і раніше.
+        if ($tasks === null) {
+            return null;
+        }
+
+        $outsideSeconds = $result['outsideSeconds'] ?? null;
+
+        if (is_numeric($outsideSeconds) && (int) $outsideSeconds > 0) {
+            return 'У дні є '.$this->formatDuration((int) $outsideSeconds).' робочого часу поза тасками.';
+        }
+
+        // Тасок за день немає зовсім — весь активний час дня поза тасками.
+        // День без активності (відпустка, лікарняний) сюди не потрапляє: його
+        // окремо обробляє isEmptyDay(). Без історії стану дня ми не знаємо,
+        // тож мовчимо і лишаємо звичайне попередження про порожній трекер.
+        if ($tasks === [] && $history !== null && ! $this->isEmptyDay($history)) {
+            return 'За цей день у трекері немає жодної таски, тож увесь робочий час — поза тасками.';
+        }
+
+        return null;
+    }
+
+    /**
+     * Звіт зі часом поза тасками не зберігається: файлів у ньому немає, історія
+     * і Google Таблиця не оновлюються. Сам xlsx лишається в теці звіту на диску
+     * (по ньому видно, який саме час випав), а теку згодом прибере
+     * reports:prune-files.
+     */
+    private function blockReport(Report $report, ?array $tasks, string $reason): void
+    {
+        $report->files()->delete();
+
+        $report->update([
+            'status' => Report::STATUS_BLOCKED,
+            'summary' => null,
+            'tasks' => $tasks,
+            'error_message' => $reason.' Поки він не розподілений по тасках, звіт не формується.',
+            'generated_at' => null,
+        ]);
+
+        $tracker = TaskProviders::forUser($report->employee?->user)->providerLabel();
+
+        app(TelegramService::class)->notify($report->employee?->user, implode("\n", [
+            "⚠️ Звіт за {$report->report_date->format('d.m.Y')} не сформовано.",
+            $reason,
+            "Додайте у {$tracker} таски з проставленим часом початку й завершення так, щоб вони покрили весь день, і сформуйте звіт заново: ".config('app.url'),
+        ]));
+    }
+
+    /**
+     * Тривалість для людини: «1 год 20 хв», «40 хв», «30 с».
+     */
+    private function formatDuration(int $seconds): string
+    {
+        $hours = intdiv($seconds, 3600);
+        $minutes = intdiv($seconds % 3600, 60);
+
+        $parts = array_filter([
+            $hours ? "{$hours} год" : null,
+            $minutes ? "{$minutes} хв" : null,
+        ]);
+
+        return $parts ? implode(' ', $parts) : "{$seconds} с";
     }
 
     private function notifyFailure(Report $report): void

@@ -143,6 +143,11 @@ function clearConsoleLine() {
 // У worker-режимі попередження додатково збираються і віддаються в підсумковому JSON.
 const workerWarnings = [];
 
+// Час дня, не покритий жодною таскою (секунди), як його порахував Python при
+// збірці Excel. null — розподіл не рахувався: тасок немає, або звіт зібрано
+// зі старого HTML-формату, де колонки розподілу взагалі немає.
+let outsideTasksSeconds = null;
+
 function reportWarning(message) {
   workerWarnings.push(message);
   clearProgressBar();
@@ -1756,6 +1761,11 @@ task_due_grace = int(os.environ.get('TASK_DUE_GRACE_MINUTES') or '15') / 1440.0
 # Короткий залишок поза тасками (перемикання, пауза між тасками) не вартий окремого
 # рядка — його дописуємо до попередньої таски. Більший лишається «Поза тасками».
 task_outside_merge = int(os.environ.get('TASK_OUTSIDE_MERGE_MINUTES') or '15') / 1440.0
+# Скільки часу дня не належить жодній тасці — за цим числом бекенд вирішує,
+# чи віддавати звіт працівнику. -1 означає, що розподіл не рахувався взагалі
+# (тасок немає або в дні немає рядків активності), і це не те саме, що 0.
+task_coverage_path = os.environ.get('TASK_COVERAGE_PATH') or ''
+outside_seconds_total = -1
 
 def column_letter(index):
     index += 1
@@ -2534,7 +2544,10 @@ with tempfile.TemporaryDirectory() as temp_directory:
         # показуємо окремим рядком — щоб «Час разом» лишався рівним активному часу
         # дня, а не тихо дописувався останній тасці.
         # Менш як пів секунди — це похибка float від різниць часток доби, а не
-        # робочий час: такий рядок показав би 00:00:00.
+        # робочий час: такий рядок показав би 00:00:00. Бекенду віддаємо рівно те
+        # саме число, що потрапило у файл, щоб звіт не блокувався через похибку.
+        outside_seconds_total = int(round(outside_duration * 86400)) if outside_duration >= 0.5 / 86400.0 else 0
+
         if outside_duration >= 0.5 / 86400.0:
             tasks.append({
                 'name': 'Поза тасками',
@@ -2601,6 +2614,10 @@ with tempfile.TemporaryDirectory() as temp_directory:
                 absolute_path = os.path.join(root, file_name)
                 archive_name = os.path.relpath(absolute_path, temp_directory).replace(os.sep, '/')
                 target_archive.write(absolute_path, archive_name)
+
+if task_coverage_path:
+    with open(task_coverage_path, 'w', encoding='utf-8') as coverage_file:
+        json.dump({'outside_seconds': outside_seconds_total}, coverage_file)
 `;
 
   // Скрипт завеликий для аргументу командного рядка Windows (ліміт 32767 симв.),
@@ -2618,32 +2635,57 @@ with tempfile.TemporaryDirectory() as temp_directory:
 }
 
 async function runCombinePythonScript(pythonScriptPath, combinedExcelPath, downloadedFilePath, secondaryRows, apiReportDate) {
-  await execFileAsync(pythonPath, [pythonScriptPath], {
-    env: {
-      ...process.env,
-      OUTPUT_XLSX_PATH: combinedExcelPath,
-      SOURCE_XLSX_PATH: downloadedFilePath,
-      SECONDARY_ROWS_JSON: JSON.stringify(secondaryRows.map((row) => row.map((cell) => ({
-        value: cell.value ?? '',
-        isSectionTitle: Boolean(cell.isSectionTitle),
-      })))),
-      TASK_TABLE_ROWS_JSON: JSON.stringify(buildTaskTableRows().map((row) => row.map((cell) => ({
-        value: cell.value ?? '',
-        isTaskTableHeader: Boolean(cell.isTaskTableHeader),
-      })))),
-      SUMMARY_START_COLUMN_INDEX: String(SUMMARY_START_COLUMN_INDEX),
-      TASK_TABLE_START_COLUMN_INDEX: String(TASK_TABLE_START_COLUMN_INDEX),
-      TASK_TABLE_START_ROW_INDEX: String(TASK_TABLE_START_ROW_INDEX),
-      TRELLO_TASKS_JSON: JSON.stringify(TRELLO_TASKS.map((task) => ({
-        name: String(task.name ?? ''),
-        comment: String(task.comment ?? ''),
-        start: String(task.start ?? ''),
-        due: String(task.due ?? ''),
-      }))),
-      REPORT_DATE_ISO: apiReportDate,
-    },
-    maxBuffer: 10 * 1024 * 1024,
-  });
+  const coveragePath = path.join(path.dirname(combinedExcelPath), `.yaware-coverage-${Date.now()}.json`);
+
+  try {
+    await execFileAsync(pythonPath, [pythonScriptPath], {
+      env: {
+        ...process.env,
+        TASK_COVERAGE_PATH: coveragePath,
+        OUTPUT_XLSX_PATH: combinedExcelPath,
+        SOURCE_XLSX_PATH: downloadedFilePath,
+        SECONDARY_ROWS_JSON: JSON.stringify(secondaryRows.map((row) => row.map((cell) => ({
+          value: cell.value ?? '',
+          isSectionTitle: Boolean(cell.isSectionTitle),
+        })))),
+        TASK_TABLE_ROWS_JSON: JSON.stringify(buildTaskTableRows().map((row) => row.map((cell) => ({
+          value: cell.value ?? '',
+          isTaskTableHeader: Boolean(cell.isTaskTableHeader),
+        })))),
+        SUMMARY_START_COLUMN_INDEX: String(SUMMARY_START_COLUMN_INDEX),
+        TASK_TABLE_START_COLUMN_INDEX: String(TASK_TABLE_START_COLUMN_INDEX),
+        TASK_TABLE_START_ROW_INDEX: String(TASK_TABLE_START_ROW_INDEX),
+        TRELLO_TASKS_JSON: JSON.stringify(TRELLO_TASKS.map((task) => ({
+          name: String(task.name ?? ''),
+          comment: String(task.comment ?? ''),
+          start: String(task.start ?? ''),
+          due: String(task.due ?? ''),
+        }))),
+        REPORT_DATE_ISO: apiReportDate,
+      },
+      maxBuffer: 10 * 1024 * 1024,
+    });
+
+    outsideTasksSeconds = await readTaskCoverage(coveragePath);
+  } finally {
+    await fs.rm(coveragePath, { force: true }).catch(() => null);
+  }
+}
+
+/**
+ * Час поза тасками з файлу, який залишив Python. -1 у файлі і будь-яка проблема
+ * з читанням дають null: краще віддати звіт, ніж заблокувати його через збій
+ * власного ж обміну даними.
+ */
+async function readTaskCoverage(coveragePath) {
+  try {
+    const parsed = JSON.parse(await fs.readFile(coveragePath, 'utf8'));
+    const seconds = Number(parsed?.outside_seconds);
+
+    return Number.isFinite(seconds) && seconds >= 0 ? seconds : null;
+  } catch {
+    return null;
+  }
 }
 
 const EMPTY_DAY_MESSAGE = 'За обрану дату в Yaware немає даних активності, тому звіт не сформовано. Оберіть інший день.';
@@ -3469,6 +3511,8 @@ try {
           status: 'ok',
           file: combinedExcelPath,
           dataFile: historyDataPath,
+          // Час дня, не покритий тасками (секунди); null — не рахувався.
+          outsideSeconds: outsideTasksSeconds,
           employee: { id: employeeId, name: employee.name },
           summary: mapSummaryRow(summaryPayload, API_REPORT_DATE, employee.name),
           warnings: workerWarnings,
