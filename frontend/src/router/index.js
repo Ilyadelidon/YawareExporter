@@ -24,6 +24,11 @@ const routes = [
         component: () => import('../views/HistoryView.vue'),
       },
       {
+        path: 'plans',
+        name: 'plans',
+        component: () => import('../views/PlansView.vue'),
+      },
+      {
         // Персональні підключення працівника; адміністратор налаштовує
         // командні інтеграції у «Налаштуваннях».
         path: 'integrations',

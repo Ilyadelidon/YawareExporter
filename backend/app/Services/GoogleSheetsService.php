@@ -66,6 +66,12 @@ class GoogleSheetsService
     /** Коди, за якими Google по суті просить просто повторити запит. */
     private const TRANSIENT_STATUSES = [408, 429, 500, 502, 503, 504];
 
+    /**
+     * Запис у велику таблицю, яку давно не відкривали: Google спершу
+     * «прокидає» її — перший batchUpdate на копії плану йшов 168 с.
+     */
+    private const LARGE_SHEET_TIMEOUT_SECONDS = 240;
+
     public function __construct(private readonly ?string $spreadsheetId = null) {}
 
     /**
@@ -317,6 +323,149 @@ class GoogleSheetsService
     public static function spreadsheetUrl(string $spreadsheetId): string
     {
         return "https://docs.google.com/spreadsheets/d/{$spreadsheetId}/edit";
+    }
+
+    /**
+     * Повністю перезаписує аркуш готовою сіткою клітинок (значення разом із
+     * форматом) одним batchUpdate: очищення, розмір сітки, закріплення, дані.
+     * Інших аркушів таблиці не чіпає — вона може бути спільною.
+     *
+     * @param  list<list<array<string, mixed>|object>>  $rows  клітинки у форматі CellData Sheets API
+     * @param  array<int, int>  $columnWidths  ширина колонки в пікселях за індексом
+     */
+    public function replaceSheet(
+        string $spreadsheetId,
+        string $title,
+        array $rows,
+        int $frozenRows = 0,
+        int $frozenColumns = 0,
+        array $columnWidths = [],
+        array $hiddenColumns = [],
+    ): void {
+        $this->withRetries("вивантаження аркуша «{$title}»", function () use ($spreadsheetId, $title, $rows, $frozenRows, $frozenColumns, $columnWidths, $hiddenColumns) {
+            $existing = $this->sheetProperties($spreadsheetId);
+            $sheetId = collect($existing)->first(fn (array $properties) => $properties['title'] === $title)['sheetId'] ?? null;
+
+            if ($sheetId === null) {
+                $sheetId = $this->request()->timeout(self::LARGE_SHEET_TIMEOUT_SECONDS)
+                    ->post(self::SHEETS_API."/{$spreadsheetId}:batchUpdate", [
+                        'requests' => [['addSheet' => ['properties' => ['title' => $title]]]],
+                    ])
+                    ->throw()
+                    ->json('replies.0.addSheet.properties.sheetId');
+            }
+
+            $rowCount = max(1, count($rows));
+            $columnCount = max(1, ...array_map('count', $rows ?: [[]]));
+
+            $requests = [
+                // Спершу знімаємо закріплення: інакше зменшення сітки впирається в нього.
+                ['updateSheetProperties' => [
+                    'properties' => ['sheetId' => $sheetId, 'gridProperties' => ['frozenRowCount' => 0, 'frozenColumnCount' => 0]],
+                    'fields' => 'gridProperties(frozenRowCount,frozenColumnCount)',
+                ]],
+                ['updateCells' => ['range' => ['sheetId' => $sheetId], 'fields' => '*']],
+                ['updateSheetProperties' => [
+                    'properties' => ['sheetId' => $sheetId, 'gridProperties' => [
+                        'rowCount' => $rowCount + 1,
+                        'columnCount' => $columnCount,
+                    ]],
+                    'fields' => 'gridProperties(rowCount,columnCount)',
+                ]],
+                ['updateCells' => [
+                    'start' => ['sheetId' => $sheetId, 'rowIndex' => 0, 'columnIndex' => 0],
+                    'rows' => array_map(fn (array $cells) => ['values' => $cells], $rows),
+                    'fields' => 'userEnteredValue,userEnteredFormat,note',
+                ]],
+                ['updateSheetProperties' => [
+                    'properties' => ['sheetId' => $sheetId, 'gridProperties' => [
+                        'frozenRowCount' => $frozenRows,
+                        'frozenColumnCount' => $frozenColumns,
+                    ]],
+                    'fields' => 'gridProperties(frozenRowCount,frozenColumnCount)',
+                ]],
+            ];
+
+            foreach ($columnWidths as $index => $pixels) {
+                $requests[] = ['updateDimensionProperties' => [
+                    'range' => ['sheetId' => $sheetId, 'dimension' => 'COLUMNS', 'startIndex' => $index, 'endIndex' => $index + 1],
+                    'properties' => ['pixelSize' => $pixels],
+                    'fields' => 'pixelSize',
+                ]];
+            }
+
+            // hiddenByUser, а не нульова ширина: службову колонку видно тим,
+            // хто спеціально розгорне сусідні, і не видно всім іншим.
+            foreach ($hiddenColumns as $index) {
+                $requests[] = ['updateDimensionProperties' => [
+                    'range' => ['sheetId' => $sheetId, 'dimension' => 'COLUMNS', 'startIndex' => $index, 'endIndex' => $index + 1],
+                    'properties' => ['hiddenByUser' => true],
+                    'fields' => 'hiddenByUser',
+                ]];
+            }
+
+            $this->request()->timeout(self::LARGE_SHEET_TIMEOUT_SECONDS)
+                ->post(self::SHEETS_API."/{$spreadsheetId}:batchUpdate", ['requests' => $requests])
+                ->throw();
+        });
+    }
+
+    /**
+     * Аркуш таким, яким його бачить людина: текст, нотатка і колір фону
+     * кожної клітинки. Values-API тут замало — у плані день відмічають саме
+     * заливкою клітинки, а коментар дня живе в нотатці.
+     *
+     * @return list<list<array{text: string, note: ?string, background: ?string}>>|null
+     *                                                                                  null — такого аркуша в таблиці немає (перейменували чи видалили)
+     */
+    public function readSheet(string $spreadsheetId, string $title): ?array
+    {
+        return $this->withRetries("читання аркуша «{$title}»", function () use ($spreadsheetId, $title) {
+            $exists = collect($this->sheetProperties($spreadsheetId))
+                ->contains(fn (array $properties) => $properties['title'] === $title);
+
+            if (! $exists) {
+                return null;
+            }
+
+            // Саме userEnteredFormat, а не effectiveFormat: для незалитих
+            // клітинок він просто відсутній, і відповідь на аркуш плану
+            // виходить у рази меншою (їх там переважна більшість).
+            $rows = $this->request()->timeout(self::LARGE_SHEET_TIMEOUT_SECONDS)
+                ->get(self::SHEETS_API."/{$spreadsheetId}", [
+                    'ranges' => "'{$title}'",
+                    'includeGridData' => 'true',
+                    'fields' => 'sheets(data(rowData(values(formattedValue,note,userEnteredFormat/backgroundColor))))',
+                ])
+                ->throw()
+                ->json('sheets.0.data.0.rowData') ?? [];
+
+            return array_map(fn (array $row) => array_map(fn (array $cell) => [
+                'text' => trim((string) ($cell['formattedValue'] ?? '')),
+                'note' => isset($cell['note']) ? trim((string) $cell['note']) : null,
+                'background' => $this->hexColor($cell['userEnteredFormat']['backgroundColor'] ?? null),
+            ], $row['values'] ?? []), $rows);
+        });
+    }
+
+    /**
+     * Колір Google (частки одиниці) у звичний #rrggbb. Відсутня складова —
+     * нуль: так задано в API, тож {"blue": 1} — це синій, а не білий.
+     *
+     * @param  array<string, float>|null  $color
+     */
+    private function hexColor(?array $color): ?string
+    {
+        if ($color === null) {
+            return null;
+        }
+
+        return sprintf(
+            '#%02x%02x%02x',
+            (int) round(($color['red'] ?? 0) * 255),
+            (int) round(($color['green'] ?? 0) * 255),
+            (int) round(($color['blue'] ?? 0) * 255),
+        );
     }
 
     /**

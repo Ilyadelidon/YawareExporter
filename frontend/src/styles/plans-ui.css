@@ -1,0 +1,511 @@
+/* Спільні стилі модуля «Плани»: кнопки, форми й діалоги. */
+.plan-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  font-size: 13.5px;
+}
+
+.plan-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.plan-field > span {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #4a4f53;
+}
+
+.plan-field input,
+.plan-field select,
+.plan-field textarea {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid #dfe5ea;
+  background: var(--surface);
+  font: inherit;
+  color: #2f3437;
+  resize: vertical;
+}
+
+.plan-field input:focus,
+.plan-field select:focus,
+.plan-field textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.plan-error {
+  margin: 0;
+  padding: 8px 10px;
+  color: #c2402f;
+  background: #faeeec;
+  font-size: 13px;
+}
+
+.plan-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.plan-actions-gap {
+  flex: 1;
+}
+
+.plan-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 16px;
+  border: 1px solid #dfe5ea;
+  background: var(--surface);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.plan-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.plan-btn .btn-icon {
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
+.plan-btn.is-accent {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.plan-btn.is-accent:hover:not(:disabled) {
+  background: #118779;
+  color: #fff;
+}
+
+.plan-btn.is-danger:hover:not(:disabled) {
+  border-color: #c2402f;
+  color: #c2402f;
+}
+
+.plan-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+/* --- Діалог задачі ---------------------------------------------------- */
+
+.task-dialog.p-dialog {
+  border: 1px solid #dfe5ea;
+  box-shadow: 0 12px 40px rgba(17, 17, 17, 0.18);
+}
+
+.task-dialog-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  font-size: 13.5px;
+  color: #2f3437;
+}
+
+.td-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 22px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.td-title {
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+
+.td-subtitle {
+  margin-top: 2px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.td-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  margin: -4px -8px 0 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.td-close:hover {
+  background: var(--line);
+  color: #2f3437;
+}
+
+.td-content {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 20px 22px;
+  overflow-y: auto;
+}
+
+.td-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.td-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #4a4f53;
+}
+
+.td-label em {
+  margin-left: 4px;
+  font-style: normal;
+  font-weight: 500;
+  color: var(--muted-2);
+}
+
+.td-input {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid #dfe5ea;
+  background: var(--surface);
+  font: inherit;
+  line-height: 1.45;
+  color: #2f3437;
+  resize: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.td-input::placeholder {
+  color: var(--muted-2);
+}
+
+.td-input:hover {
+  border-color: #c9d2d9;
+}
+
+.td-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px #d5f2ee;
+}
+
+.td-title-input {
+  font-size: 14.5px;
+  font-weight: 600;
+}
+
+.td-input.is-invalid {
+  border-color: #c2402f;
+  box-shadow: 0 0 0 3px #faeeec;
+}
+
+.td-field-error {
+  font-size: 12px;
+  color: #c2402f;
+}
+
+.td-statuses {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.td-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 11px;
+  border: 1px solid #dfe5ea;
+  background: var(--surface);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.td-status:hover {
+  border-color: #c9d2d9;
+  color: #2f3437;
+}
+
+.td-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50% !important;
+  background: currentColor;
+}
+
+.td-status.is-selected {
+  border-color: var(--accent);
+  background: #eefaf8;
+  color: #2f3437;
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* Крапка несе колір статусу, текст лишається нейтральним. */
+.td-status .td-status-dot { color: var(--muted-2); }
+.td-status.is-in_progress .td-status-dot { color: var(--accent); }
+.td-status.is-review .td-status-dot { color: #c28a1e; }
+.td-status.is-paused .td-status-dot { color: #8a8f98; }
+.td-status.is-recurring .td-status-dot { color: #0e7d70; }
+.td-status.is-done .td-status-dot { color: #4a4f53; }
+.td-status.is-not_relevant .td-status-dot { color: #d3d7da; }
+
+.td-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.td-grid.is-single {
+  grid-template-columns: 1fr;
+}
+
+.td-select.p-select {
+  width: 100%;
+  border-color: #dfe5ea;
+  box-shadow: none;
+}
+
+.td-select.p-select:not(.p-disabled):hover {
+  border-color: #c9d2d9;
+}
+
+.td-select.p-select.p-focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px #d5f2ee;
+}
+
+.td-select .p-select-label {
+  padding: 9px 11px;
+  font-size: 13.5px;
+  color: #2f3437;
+}
+
+.td-select .p-select-label.p-placeholder {
+  color: var(--muted-2);
+}
+
+.td-hint {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.td-hint strong {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.td-error {
+  margin: 0;
+  padding: 9px 12px;
+  color: #c2402f;
+  background: #faeeec;
+  font-size: 13px;
+}
+
+.td-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 22px;
+  border-top: 1px solid var(--line);
+  background: #fafbfb;
+}
+
+.td-foot-gap {
+  flex: 1;
+}
+
+.td-delete {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.td-delete:hover:not(:disabled) {
+  color: #c2402f;
+}
+
+@media (max-width: 560px) {
+  .td-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.plan-btn.is-danger-solid {
+  background: #c2402f;
+  border-color: #c2402f;
+  color: #fff;
+}
+
+.plan-btn.is-danger-solid:hover:not(:disabled) {
+  background: #a93424;
+  border-color: #a93424;
+  color: #fff;
+}
+
+.td-message {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: #4a4f53;
+}
+
+/* Дія з «хвостиком»: головне — на кнопці, рідше потрібне — у меню під
+   стрілкою, щоб шапка сторінки не перетворювалась на ряд рівних кнопок. */
+.plan-split {
+  display: inline-flex;
+}
+
+.plan-split .plan-btn + .plan-btn {
+  margin-left: -1px;
+}
+
+.plan-btn.is-caret {
+  padding: 9px 9px;
+  color: var(--muted);
+}
+
+.plan-split .plan-btn:hover:not(:disabled),
+.plan-split .plan-btn:focus-visible {
+  position: relative;
+  z-index: 1;
+}
+
+.plan-btn .btn-icon.is-spinning {
+  animation: spin 0.8s linear infinite;
+}
+
+/* Меню під стрілкою split-кнопки. */
+.plan-menu {
+  display: flex;
+  flex-direction: column;
+  min-width: 240px;
+  margin: -6px -8px;
+}
+
+.plan-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.plan-menu-item:hover {
+  background: var(--line);
+  color: var(--accent);
+}
+
+.plan-menu-item svg {
+  flex-shrink: 0;
+  color: var(--muted-2);
+}
+
+.plan-menu-item:hover svg {
+  color: var(--accent);
+}
+
+.plan-menu-item span {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.plan-menu-item small {
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Підсумок обміну з таблицею: рядок на кожну підтягнуту чи пропущену правку. */
+.export-summary {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-line;
+  opacity: 0.85;
+}
+
+/* Підпис під пунктами меню: коли таблиця оновлювалась востаннє. */
+.plan-menu-note {
+  margin: 0;
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Кнопка лише з іконкою (налаштування проекту на панелі плану). */
+.plan-btn.is-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  color: var(--muted);
+}
+
+.plan-btn.is-icon:hover:not(:disabled) {
+  color: var(--accent);
+}
+
+/* На телефоні шапка кладе дії на всю ширину — split-кнопка теж, а стрілка
+   лишається вузькою. */
+@media (max-width: 640px) {
+  .plan-split .plan-btn:first-child {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .plan-menu {
+    min-width: 200px;
+  }
+}

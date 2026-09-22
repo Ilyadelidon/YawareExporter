@@ -8,6 +8,9 @@ use App\Http\Controllers\Api\EmployeeController;
 use App\Http\Controllers\Api\EmployeeMemoryController;
 use App\Http\Controllers\Api\GoogleSpreadsheetController;
 use App\Http\Controllers\Api\OpsTelegramController;
+use App\Http\Controllers\Api\PlanGoogleController;
+use App\Http\Controllers\Api\PlanProjectController;
+use App\Http\Controllers\Api\PlanTaskController;
 use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\StatsController;
 use App\Http\Controllers\Api\TaskController;
@@ -72,7 +75,31 @@ Route::middleware(['auth:sanctum', 'not-dismissed'])->group(function () {
     Route::get('/stats', [StatsController::class, 'index']);
     Route::get('/stats/activities', [StatsController::class, 'activities']);
 
+    // «Плани»: працівник бачить проекти, де він учасник, і веде власні задачі;
+    // керування проектами — нижче, в адмінській групі.
+    Route::get('/plans/projects', [PlanProjectController::class, 'index']);
+    Route::get('/plans/projects/{project}', [PlanProjectController::class, 'show']);
+    Route::post('/plans/projects/{project}/sections', [PlanProjectController::class, 'storeSection']);
+    Route::post('/plans/projects/{project}/tasks', [PlanTaskController::class, 'store']);
+    Route::patch('/plans/tasks/{task}', [PlanTaskController::class, 'update']);
+    Route::delete('/plans/tasks/{task}', [PlanTaskController::class, 'destroy']);
+    Route::put('/plans/tasks/{task}/days/{date}', [PlanTaskController::class, 'markDay']);
+    Route::delete('/plans/tasks/{task}/days/{date}', [PlanTaskController::class, 'unmarkDay']);
+    Route::put('/plans/tasks/{task}/current', [PlanTaskController::class, 'setCurrent']);
+    Route::delete('/plans/tasks/{task}/current', [PlanTaskController::class, 'clearCurrent']);
+
     Route::middleware('admin')->group(function () {
+        Route::post('/plans/projects', [PlanProjectController::class, 'store']);
+        Route::patch('/plans/projects/{project}', [PlanProjectController::class, 'update']);
+        Route::delete('/plans/projects/{project}', [PlanProjectController::class, 'destroy']);
+        Route::put('/plans/projects/{project}/members', [PlanProjectController::class, 'updateMembers']);
+        Route::patch('/plans/sections/{section}', [PlanProjectController::class, 'updateSection']);
+        Route::delete('/plans/sections/{section}', [PlanProjectController::class, 'destroySection']);
+        Route::get('/plans/google', [PlanGoogleController::class, 'show']);
+        Route::put('/plans/google', [PlanGoogleController::class, 'link']);
+        Route::delete('/plans/google', [PlanGoogleController::class, 'unlink']);
+        Route::post('/plans/export', [PlanGoogleController::class, 'export'])->middleware('throttle:5,1');
+
         Route::post('/bitrix/workspace', [BitrixAccountController::class, 'storeWorkspace']);
         Route::delete('/bitrix/workspace', [BitrixAccountController::class, 'destroyWorkspace']);
 
