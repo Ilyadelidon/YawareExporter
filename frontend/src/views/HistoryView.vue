@@ -134,8 +134,8 @@ onMounted(async () => {
         <span class="total-value">{{ totals.days }}</span>
       </div>
       <div class="total-card">
-        <span class="total-label">Загальний час</span>
-        <span class="total-value">{{ formatDuration(totals.total_seconds) }}</span>
+        <span class="total-label">Загальний робочий час</span>
+        <span class="total-value">{{ formatDuration(totals.work_seconds) }}</span>
       </div>
       <div class="total-card is-productive">
         <span class="total-label">Продуктивно</span>

@@ -44,6 +44,10 @@ class StatsController extends Controller
                 'unproductive_seconds' => (int) $stats->sum('unproductive_seconds'),
                 'neutral_seconds' => (int) $stats->sum('neutral_seconds'),
                 'total_seconds' => (int) $stats->sum('total_seconds'),
+                // Робочий час: із загального віднімається непродуктивний (як у Табелі).
+                'work_seconds' => (int) $stats->sum(
+                    fn (DailyStat $stat) => max(0, (int) $stat->total_seconds - (int) $stat->unproductive_seconds),
+                ),
                 'lateness_seconds' => (int) $stats->sum('lateness_seconds'),
             ],
             'period' => ['date_from' => $dateFrom, 'date_to' => $dateTo],

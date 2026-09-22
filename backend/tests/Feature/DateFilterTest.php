@@ -94,6 +94,33 @@ class DateFilterTest extends TestCase
         $this->assertSame(['2026-07-10', '2026-07-15'], $dates);
     }
 
+    public function test_stats_totals_report_work_time_without_unproductive(): void
+    {
+        $employee = $this->employee();
+        DailyStat::create([
+            'employee_id' => $employee->id,
+            'date' => '2026-07-10',
+            'productive_seconds' => 3000,
+            'neutral_seconds' => 600,
+            'unproductive_seconds' => 900,
+            'total_seconds' => 4500,
+        ]);
+        // День лише з непродуктивним часом у робочий час не додає нічого.
+        DailyStat::create([
+            'employee_id' => $employee->id,
+            'date' => '2026-07-11',
+            'unproductive_seconds' => 1200,
+            'total_seconds' => 1200,
+        ]);
+
+        Sanctum::actingAs($this->admin());
+
+        $this->getJson('/api/stats?date_from=2026-07-10&date_to=2026-07-11')
+            ->assertOk()
+            ->assertJsonPath('totals.total_seconds', 5700)
+            ->assertJsonPath('totals.work_seconds', 3600);
+    }
+
     public function test_activities_of_a_day_are_matched_exactly(): void
     {
         $employee = $this->employee();
