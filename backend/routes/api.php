@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\BitrixAccountController;
 use App\Http\Controllers\Api\EmployeeController;
 use App\Http\Controllers\Api\EmployeeMemoryController;
 use App\Http\Controllers\Api\GoogleSpreadsheetController;
+use App\Http\Controllers\Api\IntegrationLinkController;
 use App\Http\Controllers\Api\OpsTelegramController;
 use App\Http\Controllers\Api\PlanGoogleController;
 use App\Http\Controllers\Api\PlanProjectController;
@@ -71,6 +72,9 @@ Route::middleware(['auth:sanctum', 'not-dismissed'])->group(function () {
     Route::post('/google/spreadsheet', [GoogleSpreadsheetController::class, 'store']);
     Route::post('/google/spreadsheet/link', [GoogleSpreadsheetController::class, 'link']);
     Route::delete('/google/spreadsheet', [GoogleSpreadsheetController::class, 'destroy']);
+
+    // Готові посилання на підключені сервіси — кнопки переходу в боковому меню.
+    Route::get('/integrations/links', [IntegrationLinkController::class, 'index']);
 
     Route::get('/stats', [StatsController::class, 'index']);
     Route::get('/stats/activities', [StatsController::class, 'activities']);

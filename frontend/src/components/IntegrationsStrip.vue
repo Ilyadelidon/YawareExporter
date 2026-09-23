@@ -4,10 +4,14 @@ import { useRoute, useRouter } from 'vue-router';
 import Select from 'primevue/select';
 import client from '../api/client';
 import { useAuthStore } from '../stores/auth';
+import { useIntegrationLinksStore } from '../stores/integrations';
 import IntegrationRow from './IntegrationRow.vue';
 import '../styles/integrations-ui.css';
 
 const auth = useAuthStore();
+// Кнопки переходу в боковому меню беруть стан звідси — оновлюємо його
+// разом зі статусами, щоб меню не відставало від щойно зробленого підключення.
+const sidebarLinks = useIntegrationLinksStore();
 const route = useRoute();
 const router = useRouter();
 
@@ -107,6 +111,7 @@ async function loadStatus() {
   try {
     const { data } = await client.get('/trello/status');
     status.value = data;
+    sidebarLinks.load();
     if (data.connected) loadBoards();
   } catch (error) {
     say('trello', 'error', error.response?.data?.message || 'Не вдалося отримати стан Trello.');
@@ -204,6 +209,7 @@ async function loadBitrixStatus() {
   try {
     const { data } = await client.get('/bitrix/status');
     bitrix.value = data;
+    sidebarLinks.load();
   } catch (error) {
     say('bitrix', 'error', error.response?.data?.message || 'Не вдалося отримати стан Бітрікс24.');
   } finally {
@@ -266,6 +272,7 @@ async function switchProvider(next) {
     const { data } = await client.put('/tasks/provider', { provider: next });
     provider.value = data.provider;
     if (auth.user) auth.user.task_provider = data.provider;
+    sidebarLinks.load();
     const ready = data.provider === 'bitrix' ? bitrixConnected.value : connected.value;
     // Якщо новий трекер ще не готовий до звітів — підказуємо, що зробити далі.
     say(data.provider, 'ok', ready
@@ -309,6 +316,7 @@ async function loadGoogleStatus() {
   try {
     const { data } = await client.get('/google/status');
     google.value = data;
+    sidebarLinks.load();
     if (!sheetName.value) sheetName.value = `Звіти — ${auth.user?.name || ''}`.trim();
     if (!sheetEmail.value) sheetEmail.value = auth.user?.email || '';
   } catch (error) {
