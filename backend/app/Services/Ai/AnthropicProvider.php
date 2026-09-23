@@ -4,8 +4,10 @@ namespace App\Services\Ai;
 
 use Anthropic\Client;
 use Anthropic\Core\Exceptions\APIConnectionException;
+use Anthropic\Core\Exceptions\APIStatusException;
 use Anthropic\Core\Exceptions\AuthenticationException;
 use Anthropic\Core\Exceptions\RateLimitException;
+use Anthropic\ErrorType;
 use Anthropic\Messages\Message;
 use Anthropic\Messages\ThinkingConfigAdaptive;
 use Anthropic\Messages\Tool;
@@ -124,9 +126,73 @@ class AnthropicProvider implements AnalysisProvider
             throw new RuntimeException('Ключ ANTHROPIC_API_KEY відхилено — перевірте його в .env.');
         } catch (RateLimitException) {
             throw new RuntimeException('Ліміт запитів до Claude вичерпано — спробуйте пізніше.');
+        } catch (APIStatusException $exception) {
+            // Решта відповідей з кодом помилки. Без цього гілля адміністратор
+            // бачив у розборі дампнутий JSON самого SDK замість причини.
+            throw new RuntimeException(self::explain($exception));
         } catch (APIConnectionException $exception) {
             throw new RuntimeException('Не вдалося зʼєднатися з Claude API: '.$exception->getMessage());
         }
+    }
+
+    /**
+     * Людське пояснення відмови API — його бачить адміністратор у картці розбору.
+     */
+    public static function explain(APIStatusException $exception): string
+    {
+        $message = self::apiMessage($exception);
+
+        // Найчастіша зупинка аналітики: ключ живий, але на акаунті скінчилися
+        // кошти. Приходить як 400 invalid_request_error, тож самого коду мало —
+        // розрізняємо за типом помилки або за текстом про баланс.
+        if ($exception->type === ErrorType::BILLING_ERROR || str_contains(mb_strtolower($message), 'credit balance')) {
+            return 'На балансі Anthropic немає коштів';
+        }
+
+        if ($exception->status === 400) {
+            return 'Claude API відхилив запит: '.($message !== '' ? $message : 'invalid_request_error.');
+        }
+
+        return 'Claude API повернув помилку '.($exception->status ?? '')
+            .($message !== '' ? ': '.$message : '.');
+    }
+
+    /**
+     * Текст error.message з тіла відповіді. Тіло могли вже прочитати при
+     * створенні винятку, тому перемотуємо потік, а як не вийшло — беремо JSON
+     * зі самого повідомлення винятку (SDK кладе туди дамп відповіді).
+     */
+    private static function apiMessage(APIStatusException $exception): string
+    {
+        $payloads = [];
+
+        $body = $exception->response?->getBody();
+
+        if ($body !== null) {
+            if ($body->isSeekable()) {
+                $body->rewind();
+            }
+
+            $payloads[] = (string) $body;
+        }
+
+        $payloads[] = $exception->getMessage();
+
+        foreach ($payloads as $payload) {
+            $decoded = json_decode($payload, true);
+
+            if (! is_array($decoded)) {
+                continue;
+            }
+
+            $message = data_get($decoded, 'error.message') ?? data_get($decoded, 'body.error.message');
+
+            if (is_string($message) && $message !== '') {
+                return mb_substr($message, 0, 300);
+            }
+        }
+
+        return '';
     }
 
     /**
