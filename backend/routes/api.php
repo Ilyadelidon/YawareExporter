@@ -114,8 +114,8 @@ Route::middleware(['auth:sanctum', 'not-dismissed'])->group(function () {
         // Технічний Telegram адміністратора: ранковий підсумок і тривоги монітора.
         Route::get('/alerts/telegram', [OpsTelegramController::class, 'status']);
         Route::post('/alerts/telegram/link', [OpsTelegramController::class, 'link']);
-        Route::delete('/alerts/telegram', [OpsTelegramController::class, 'unlink']);
-        Route::post('/alerts/telegram/test', [OpsTelegramController::class, 'test'])->middleware('throttle:5,1');
+        Route::delete('/alerts/telegram/{chat}', [OpsTelegramController::class, 'unlink']);
+        Route::post('/alerts/telegram/{chat}/test', [OpsTelegramController::class, 'test'])->middleware('throttle:5,1');
 
         Route::get('/timesheet', [TimesheetController::class, 'index']);
         Route::get('/employees', [EmployeeController::class, 'index']);

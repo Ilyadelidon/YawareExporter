@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\OpsTelegramChat;
 use App\Models\User;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -48,6 +49,33 @@ class TelegramService
     }
 
     /**
+     * Дані чату від самого Telegram (getChat): назва групи, імʼя і @нік.
+     * Потрібні для підпису чату в списку, тож збій — не привід валити запит:
+     * повертаємо null і йдемо далі.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function fetchChat(string $chatId): ?array
+    {
+        if (! $this->isConfigured()) {
+            return null;
+        }
+
+        try {
+            $chat = Http::asForm()
+                ->post(self::API_BASE.config('services.telegram.bot_token').'/getChat', ['chat_id' => $chatId])
+                ->throw()
+                ->json('result');
+        } catch (Throwable $exception) {
+            Log::warning("Не вдалося отримати дані Telegram-чату {$chatId}: {$exception->getMessage()}");
+
+            return null;
+        }
+
+        return is_array($chat) ? $chat : null;
+    }
+
+    /**
      * Сповіщення користувачу, якщо в нього привʼязаний Telegram. Помилка
      * відправки не піднімається нагору — лише попередження в лог: сповіщення
      * ніколи не має валити генерацію звіту.
@@ -67,8 +95,9 @@ class TelegramService
 
     /**
      * Технічне сповіщення: стан ранкової автогенерації, збої планувальника.
-     * Отримують адміністратори, які підключили технічний Telegram у
-     * налаштуваннях, і розробник з OPS_TELEGRAM_EMAIL (його особистий чат).
+     * Отримують усі чати, які адміністратори підключили в налаштуваннях
+     * (у кожного їх може бути кілька), і розробник з OPS_TELEGRAM_EMAIL
+     * (його особистий чат).
      * Працівникам такі повідомлення не йдуть.
      *
      * Один чат отримує повідомлення один раз, навіть якщо він прописаний в
@@ -76,10 +105,10 @@ class TelegramService
      */
     public function notifyOps(string $text, ?string $parseMode = null): void
     {
-        $chatIds = User::where('role', User::ROLE_ADMIN)
-            ->whereNotNull('ops_telegram_chat_id')
-            ->pluck('ops_telegram_chat_id')
-            ->all();
+        $chatIds = OpsTelegramChat::whereHas(
+            'user',
+            fn ($query) => $query->where('role', User::ROLE_ADMIN),
+        )->pluck('chat_id')->all();
 
         if ($developerChatId = $this->opsEmailChatId()) {
             $chatIds[] = $developerChatId;
