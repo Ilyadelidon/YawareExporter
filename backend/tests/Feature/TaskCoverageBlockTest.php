@@ -15,7 +15,8 @@ use Tests\TestCase;
 
 /**
  * День, у якому лишився час поза тасками, звітом не стає: такий звіт однаково
- * довелось би переробляти. Працівник дізнається про це з Telegram і формує
+ * довелось би переробляти. Виняток — день зовсім без тасок: він стає звітом
+ * лише зі статистикою. Працівник дізнається про це з Telegram і формує
  * звіт заново, поправивши таски в трекері.
  */
 class TaskCoverageBlockTest extends TestCase
@@ -163,20 +164,34 @@ class TaskCoverageBlockTest extends TestCase
             && str_contains($request['text'], '1 год 20 хв'));
     }
 
-    public function test_day_without_tasks_blocks_the_report(): void
+    /**
+     * День зовсім без тасок не блокується: у сервісі є статистика дня, а файл
+     * і Google Таблиця чекають, поки таски з'являться і звіт перегенерують.
+     */
+    public function test_day_without_tasks_shows_only_statistics(): void
     {
-        $this->workerReturning(null, $this->historyWithActivity());
+        $this->workerReturning(28800, $this->historyWithActivity());
         $this->fakeTrello([]);
 
         $report = $this->report();
+        $user = $report->employee->user;
+        $user->forceFill(['google_spreadsheet_id' => 'sheet-abc'])->save();
+
         (new GenerateYawareReport($report))->handle();
 
         $report->refresh();
 
-        $this->assertSame(Report::STATUS_BLOCKED, $report->status);
-        $this->assertStringContainsString('жодної таски', (string) $report->error_message);
+        $this->assertSame(Report::STATUS_COMPLETED, $report->status);
+        $this->assertSame([], $report->tasks);
+        $this->assertSame('08:00:00', $report->summary['Загальний час']);
+        $this->assertStringContainsString('тасок за день немає', $report->summary['Попередження']);
+        $this->assertArrayNotHasKey('Google Таблиця', $report->summary);
         $this->assertSame(0, $report->files()->count());
-        $this->assertSame(0, DailyStat::count());
+        $this->assertSame(1, DailyStat::count());
+
+        Http::assertNotSent(fn ($request) => str_contains($request->url(), 'googleapis.com'));
+        Http::assertSent(fn ($request) => str_contains($request->url(), 'api.telegram.org')
+            && str_contains($request['text'], 'Тасок у'));
     }
 
     public function test_day_fully_covered_by_tasks_produces_a_report(): void

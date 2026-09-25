@@ -60,6 +60,9 @@ const isFailed = computed(() => report.value?.status === 'failed');
 // Звіт свідомо не сформовано: у дні лишився час поза тасками. Це не збій,
 // тож показуємо не помилку, а що саме треба поправити в трекері.
 const isBlocked = computed(() => report.value?.status === 'blocked');
+// День без тасок стає звітом лише зі статистикою — файлу для завантаження немає.
+// Список звітів віддає files_count, окремий звіт — масив files.
+const hasFile = computed(() => (report.value?.files_count ?? report.value?.files?.length ?? 0) > 0);
 
 // Стан персональних інтеграцій працівника: без активного трекера й таблиці
 // формування звіту заблоковане. Підключають їх на сторінці «Інтеграції»;
@@ -442,7 +445,7 @@ onUnmounted(() => clearTimeout(pollTimer));
               <span class="dot"></span>
               Готовий
             </span>
-            <button class="download-btn" type="button" :disabled="downloading" @click="downloadReport">
+            <button v-if="hasFile" class="download-btn" type="button" :disabled="downloading" @click="downloadReport">
               <svg v-if="!downloading" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
               <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation: spin 0.8s linear infinite;"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>
               XLSX

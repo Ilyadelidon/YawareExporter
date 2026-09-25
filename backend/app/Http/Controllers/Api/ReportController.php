@@ -13,7 +13,7 @@ class ReportController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
-        $query = Report::with('employee')->latest('report_date');
+        $query = Report::with('employee')->withCount('files')->latest('report_date');
 
         if (! $request->user()->isAdmin()) {
             $query->whereRelation('employee', 'user_id', $request->user()->id);

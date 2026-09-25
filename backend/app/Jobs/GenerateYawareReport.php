@@ -134,6 +134,15 @@ class GenerateYawareReport implements ShouldQueue
             return;
         }
 
+        // Тасок за день немає зовсім: у сервісі показуємо лише статистику дня,
+        // а файл звіту і Google Таблиця чекають на таски — після перегенерації
+        // з тасками звіт піде звичайним шляхом.
+        if ($tasks === [] && ! $this->isEmptyDay($history)) {
+            $this->completeWithoutTasks($report, $result, $history, $tasksWarning);
+
+            return;
+        }
+
         ReportFile::create([
             'report_id' => $report->id,
             'type' => 'combined_excel',
@@ -164,10 +173,6 @@ class GenerateYawareReport implements ShouldQueue
         if ($historyWarning = $this->storeHistory($report, $history)) {
             $result['warnings'][] = $historyWarning;
         }
-
-        // Знімок тасок потрібен публікатору ще до збереження звіту: день, у
-        // якому тасок немає взагалі, в Google Таблицю не вивантажується.
-        $report->tasks = $tasks;
 
         [$googleSheetUrl, $googleWarnings] = app(ReportSheetPublisher::class)->publish($report, $result['file']);
 
@@ -245,19 +250,52 @@ class GenerateYawareReport implements ShouldQueue
 
         $outsideSeconds = $result['outsideSeconds'] ?? null;
 
+        // День зовсім без тасок не блокується — він стає звітом лише зі
+        // статистикою (див. completeWithoutTasks()).
+        if ($tasks === []) {
+            return null;
+        }
+
         if (is_numeric($outsideSeconds) && (int) $outsideSeconds > 0) {
             return 'У дні є '.$this->formatDuration((int) $outsideSeconds).' робочого часу поза тасками.';
         }
 
-        // Тасок за день немає зовсім — весь активний час дня поза тасками.
-        // День без активності (відпустка, лікарняний) сюди не потрапляє: його
-        // окремо обробляє isEmptyDay(). Без історії стану дня ми не знаємо,
-        // тож мовчимо і лишаємо звичайне попередження про порожній трекер.
-        if ($tasks === [] && $history !== null && ! $this->isEmptyDay($history)) {
-            return 'За цей день у трекері немає жодної таски, тож увесь робочий час — поза тасками.';
+        return null;
+    }
+
+    /**
+     * Звіт лише зі статистикою дня: історія (Табель, таблиці активності)
+     * оновлюється, а файлу для завантаження і вкладки в Google Таблиці немає —
+     * без тасок вони неповні. Файл від попередньої генерації теж прибираємо,
+     * щоб не завантажили застарілий.
+     *
+     * @param  array<string, mixed>  $result
+     * @param  array<string, mixed>|null  $history
+     */
+    private function completeWithoutTasks(Report $report, array $result, ?array $history, ?string $tasksWarning): void
+    {
+        $report->files()->delete();
+
+        $warnings = $result['warnings'] ?? [];
+
+        if ($historyWarning = $this->storeHistory($report, $history)) {
+            $warnings[] = $historyWarning;
         }
 
-        return null;
+        if ($tasksWarning) {
+            $warnings[] = $tasksWarning;
+        }
+
+        $warnings[] = 'тасок за день немає — файл звіту не сформовано і в Google Таблицю не вивантажено.';
+
+        $report->update([
+            'status' => Report::STATUS_COMPLETED,
+            'summary' => ($result['summary'] ?? []) + ['Попередження' => implode("\n", $warnings)],
+            'tasks' => [],
+            'generated_at' => now(),
+        ]);
+
+        $this->notifySuccess($report, [], null);
     }
 
     /**
