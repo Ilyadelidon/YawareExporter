@@ -150,4 +150,55 @@ class GoogleSheetsMonthSyncTest extends TestCase
                 && $ranges["'".self::MONTH_TITLE."'!F2"] === "='25.07.2026'!X8";
         });
     }
+
+    public function test_totals_cover_rows_inserted_above_them(): void
+    {
+        $grid = $this->grid(false);
+        // Вільних рядків немає: таска в рядку 2, підсумок одразу під нею.
+        $grid = [$grid[0], [2 => 'Стара таска'], $grid[4]];
+
+        Http::fake(function (Request $request) use ($grid) {
+            $url = urldecode($request->url());
+
+            if ($request->method() === 'GET' && str_contains($url, "'24.07.2026'!V8")) {
+                return Http::response(['values' => [['Таска А']]]);
+            }
+
+            if ($request->method() === 'GET' && str_contains($url, 'fields=sheets.properties')) {
+                return Http::response(['sheets' => [
+                    ['properties' => ['sheetId' => 7, 'index' => 0, 'title' => self::MONTH_TITLE]],
+                ]]);
+            }
+
+            if ($request->method() === 'GET' && str_contains($url, "'".self::MONTH_TITLE."'!A1:AZ")) {
+                return Http::response(['values' => $grid]);
+            }
+
+            return Http::response([]);
+        });
+
+        (new GoogleSheetsService(self::SPREADSHEET_ID))
+            ->syncMonthSheet('24.07.2026', CarbonImmutable::parse('2026-07-24'));
+
+        Http::assertSent(fn (Request $request) => str_contains($request->url(), ':batchUpdate')
+            && ($request->data()['requests'][0]['insertDimension']['range']['startIndex'] ?? null) === 2);
+
+        Http::assertSent(function (Request $request) {
+            if (! str_contains($request->url(), 'values:batchUpdate')) {
+                return false;
+            }
+
+            $ranges = collect($request->data()['data'])->keyBy('range')
+                ->map(fn (array $entry) => $entry['values'][0][0]);
+
+            // Нова таска — у вставленому рядку 3, підсумок зʼїхав у рядок 4
+            // і рахує обидва рядки, а не лише старий діапазон до рядка 2.
+            return $ranges["'".self::MONTH_TITLE."'!C3"] === 'Таска А'
+                && $ranges["'".self::MONTH_TITLE."'!E3"] === "='24.07.2026'!X8"
+                && $ranges["'".self::MONTH_TITLE."'!D4"] === '=SUM(D2:D3)'
+                && $ranges["'".self::MONTH_TITLE."'!E4"] === '=SUM(E2:E3)'
+                && $ranges["'".self::MONTH_TITLE."'!F4"] === '=SUM(F2:F3)'
+                && $ranges["'".self::MONTH_TITLE."'!G4"] === '=SUM(G2:G3)';
+        });
+    }
 }

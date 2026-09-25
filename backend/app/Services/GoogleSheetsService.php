@@ -588,6 +588,8 @@ class GoogleSheetsService
             for ($i = 0; $i < $missingRows; $i++) {
                 $freeRows[] = $totalsRow + $i;
             }
+
+            $totalsRow += $missingRows;
         }
 
         $header = $grid[0] ?? [];
@@ -628,6 +630,23 @@ class GoogleSheetsService
                 'range' => "'{$monthTitle}'!{$dateColumnLetter}{$row}",
                 'values' => [["='{$dayTitle}'!".self::DAY_TASK_TIME_COLUMN.$dayRow]],
             ];
+        }
+
+        // Формули підсумків переписуються на весь діапазон тасок щоразу:
+        // рядки, вставлені над підсумком, лежать уже за межею SUM(D2:D40) —
+        // Sheets розширює діапазон лише при вставці всередину нього, тож дні,
+        // таски яких потрапили в нові рядки, показували 0:00:00. Заразом
+        // підсумок отримують і колонки дат, вставлені поза робочими днями.
+        foreach ($header as $index => $value) {
+            $isDate = $index >= self::MONTH_FIRST_DATE_COLUMN_INDEX && is_numeric($value);
+
+            if ($isDate || $index === $spentColumn) {
+                $letter = $this->columnLetter($index);
+                $data[] = [
+                    'range' => "'{$monthTitle}'!{$letter}{$totalsRow}",
+                    'values' => [["=SUM({$letter}2:{$letter}".($totalsRow - 1).')']],
+                ];
+            }
         }
 
         $this->request()
