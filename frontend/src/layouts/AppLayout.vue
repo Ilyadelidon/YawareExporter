@@ -4,9 +4,11 @@ import { useRouter, useRoute } from 'vue-router';
 import client from '../api/client';
 import { useAuthStore } from '../stores/auth';
 import { useIntegrationLinksStore } from '../stores/integrations';
+import { useReportGenerationStore } from '../stores/reportGeneration';
 
 const auth = useAuthStore();
 const links = useIntegrationLinksStore();
+const generation = useReportGenerationStore();
 const router = useRouter();
 const route = useRoute();
 
@@ -80,9 +82,13 @@ onMounted(() => {
   }, 30000);
 });
 
+// Звіт, що формувався, змінив статус — картка «за сьогодні» не чекає 30 с.
+watch(() => generation.report?.status, () => loadToday());
+
 onBeforeUnmount(() => clearInterval(todayTimer));
 
 async function handleLogout() {
+  generation.stop();
   await auth.logout();
   router.push({ name: 'login' });
 }
@@ -120,6 +126,7 @@ async function handleLogout() {
           <router-link :to="{ name: 'reports' }" class="nav-item" active-class="nav-prefix-match" exact-active-class="router-link-active">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="square"><path d="M3 21h18"></path><path d="M6 17v-6"></path><path d="M11 17V5"></path><path d="M16 17v-9"></path></svg>
             Звіти
+            <svg v-if="generation.isActive" class="nav-spinner" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Звіт формується"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>
           </router-link>
           <router-link :to="{ name: 'history' }" class="nav-item">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="square"><path d="M2 12h4l3-8 5 16 3-8h5"></path></svg>
@@ -365,6 +372,13 @@ async function handleLogout() {
 
 .nav-item svg {
   flex-shrink: 0;
+}
+
+/* Звіт формується — крутимо індикатор біля «Звіти» на будь-якій сторінці */
+.nav-item .nav-spinner {
+  margin-left: auto;
+  color: var(--sb-accent);
+  animation: spin 0.8s linear infinite;
 }
 
 .nav-item:hover {

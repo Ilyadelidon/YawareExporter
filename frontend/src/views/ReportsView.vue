@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import DatePicker from 'primevue/datepicker';
 import Message from 'primevue/message';
 import Select from 'primevue/select';
@@ -7,13 +7,17 @@ import client from '../api/client';
 import ActivityBreakdown from '../components/ActivityBreakdown.vue';
 import AiAnalysisPanel from '../components/AiAnalysisPanel.vue';
 import { useAuthStore } from '../stores/auth';
+import { useReportGenerationStore } from '../stores/reportGeneration';
 
 const auth = useAuthStore();
+const generation = useReportGenerationStore();
 
 const employees = ref([]);
-const selectedEmployee = ref(null);
+// Дату й працівника тримаємо в сторі: після переходу між сторінками звіти
+// відкриваються там, де їх залишили, і звіт, що формується, лишається з лоадером.
+const selectedEmployee = ref(generation.employeeId);
 const ownEmployeeId = ref(null);
-const selectedDate = ref(new Date());
+const selectedDate = ref(generation.date ? new Date(`${generation.date}T00:00:00`) : new Date());
 const report = ref(null);
 const loading = ref(true);
 const generating = ref(false);
@@ -27,8 +31,6 @@ const tasksSnapshot = ref(false);
 // Який трекер віддав таски: приходить у відповіді /tasks, до першого запиту
 // беремо вибір користувача з профілю.
 const tasksProvider = ref(null);
-
-let pollTimer = null;
 
 const labelColors = {
   green: '#61bd4f',
@@ -162,29 +164,23 @@ function toIso(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
-function schedulePoll() {
-  clearTimeout(pollTimer);
-  if (isActive.value && report.value?.id) {
-    pollTimer = setTimeout(refreshReport, 5000);
+// Статус звіту, що формується, политься в сторі — він не зупиняється,
+// коли сторінку покидають. Тут лише віддаємо звіт під нагляд.
+function trackIfActive() {
+  if (isActive.value) {
+    generation.track(report.value);
   }
 }
 
-async function refreshReport() {
-  if (!report.value?.id) return;
-  try {
-    const { data } = await client.get(`/reports/${report.value.id}`);
-    report.value = data.data;
-  } catch {
-    // тимчасова помилка мережі — наступний тік поллінгу спробує ще раз
-  }
+watch(() => generation.report, (tracked) => {
+  if (!tracked || tracked.id !== report.value?.id) return;
+  report.value = tracked;
   if (isDone.value && !tasks.value.length) {
     applyTasks();
   }
-  schedulePoll();
-}
+});
 
 async function loadReport() {
-  clearTimeout(pollTimer);
   loading.value = true;
   errorMessage.value = '';
   report.value = null;
@@ -213,7 +209,7 @@ async function loadReport() {
   if (isDone.value) {
     applyTasks();
   }
-  schedulePoll();
+  trackIfActive();
 }
 
 async function loadEmployees() {
@@ -224,7 +220,9 @@ async function loadEmployees() {
   employees.value = data.data;
   const own = employees.value.find((employee) => employee.user_id === auth.user?.id);
   ownEmployeeId.value = own?.id || null;
-  selectedEmployee.value = own?.id || employees.value[0]?.id || null;
+  if (!employees.value.some((employee) => employee.id === selectedEmployee.value)) {
+    selectedEmployee.value = own?.id || employees.value[0]?.id || null;
+  }
 }
 
 async function generateReport() {
@@ -244,7 +242,7 @@ async function generateReport() {
     }
     const { data } = await client.post('/reports', payload);
     report.value = data.data;
-    schedulePoll();
+    generation.track(report.value);
   } catch (error) {
     errorMessage.value = error.response?.data?.message || 'Не вдалося поставити звіт у чергу.';
   } finally {
@@ -327,22 +325,20 @@ async function loadIntegrations() {
   }
 }
 
-watch([selectedDate, selectedEmployee], () => {
-  if (selectedDate.value) {
-    loadReport();
-  }
-});
-
 onMounted(async () => {
   if (!auth.isAdmin) loadIntegrations();
   await loadEmployees();
-  // для адміна з обраним працівником loadReport уже викликав watch
-  if (!auth.isAdmin || !selectedEmployee.value) {
-    await loadReport();
-  }
+  await loadReport();
+  // Слухаємо вибір лише після першого завантаження — інакше підстановка
+  // працівника в loadEmployees запустила б loadReport удруге.
+  watch([selectedDate, selectedEmployee], () => {
+    generation.date = selectedDate.value ? toIso(selectedDate.value) : null;
+    generation.employeeId = selectedEmployee.value;
+    if (selectedDate.value) {
+      loadReport();
+    }
+  });
 });
-
-onUnmounted(() => clearTimeout(pollTimer));
 </script>
 
 <template>
