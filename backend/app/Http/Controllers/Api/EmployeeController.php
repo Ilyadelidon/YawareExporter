@@ -3,7 +3,10 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\BitrixWorkspace;
 use App\Models\Employee;
+use App\Models\User;
+use App\Services\GoogleSheetsService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -11,9 +14,53 @@ class EmployeeController extends Controller
 {
     public function index(): JsonResponse
     {
+        $employees = Employee::with('user.bitrixAccount')->orderBy('name')->get();
+        $bitrixPortal = BitrixWorkspace::active() !== null;
+
         return response()->json([
-            'data' => Employee::orderBy('name')->get(),
+            'data' => $employees->map(fn (Employee $employee) => [
+                ...$employee->makeHidden('user')->toArray(),
+                'integrations' => $this->integrations($employee->user, $bitrixPortal),
+            ]),
         ]);
+    }
+
+    /**
+     * Що з інтеграцій працівник підключив сам — лише з бази, без походів у
+     * зовнішні API, щоб список відкривався миттєво. Хто ще жодного разу не
+     * входив, той нічого й не міг підключити: тоді `has_account` = false.
+     */
+    private function integrations(?User $user, bool $bitrixPortal): array
+    {
+        if (! $user) {
+            return ['has_account' => false];
+        }
+
+        $bitrix = $user->bitrixAccount;
+
+        return [
+            'has_account' => true,
+            'task_provider' => $user->taskProvider(),
+            'trello' => [
+                'connected' => $user->hasTrelloConnected(),
+                'username' => $user->trello_member_username,
+                'board_url' => $user->trello_board_id ? "https://trello.com/b/{$user->trello_board_id}" : null,
+            ],
+            'bitrix' => [
+                // Особистий токен без командного порталу нічого не дає.
+                'connected' => $bitrix !== null && $bitrixPortal,
+                'username' => $bitrix?->bitrix_user_name,
+            ],
+            'google' => [
+                'connected' => $user->google_spreadsheet_id !== null,
+                'url' => $user->google_spreadsheet_id
+                    ? GoogleSheetsService::spreadsheetUrl($user->google_spreadsheet_id)
+                    : null,
+            ],
+            'telegram' => [
+                'connected' => $user->hasTelegramConnected(),
+            ],
+        ];
     }
 
     public function store(Request $request): JsonResponse

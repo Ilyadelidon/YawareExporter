@@ -4,10 +4,10 @@ import DataTable from 'primevue/datatable';
 import Column from 'primevue/column';
 import Message from 'primevue/message';
 import client from '../api/client';
-import EmployeeMemoryPanel from '../components/EmployeeMemoryPanel.vue';
+import EmployeeDetailsPanel from '../components/EmployeeDetailsPanel.vue';
 
 const employees = ref([]);
-// Пам'ять AI вантажиться лише для розгорнутого рядка — окремий запит на працівника.
+// Розгорнутий рядок: інтеграції працівника й пам'ять AI (окремий запит, лише за вкладкою).
 const expandedRows = ref({});
 const loading = ref(true);
 const savingId = ref(null);
@@ -100,7 +100,7 @@ onMounted(async () => {
           <div class="table-empty">Працівників поки немає.</div>
         </template>
         <template #expansion="{ data }">
-          <EmployeeMemoryPanel :employee-id="data.id" />
+          <EmployeeDetailsPanel :employee="data" />
         </template>
         <Column expander style="width: 40px" />
         <Column field="name" header="Імʼя" sortable />
