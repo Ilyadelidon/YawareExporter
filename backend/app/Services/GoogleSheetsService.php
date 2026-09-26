@@ -265,9 +265,9 @@ class GoogleSheetsService
             ->get(self::SHEETS_API."/{$spreadsheetId}", ['fields' => 'properties.title']);
 
         if (! $read->successful()) {
-            throw new RuntimeException(
-                "Таблиця недоступна. Перевірте посилання і надайте в ній доступ редактора акаунту {$account}."
-            );
+            Log::warning("Google відмовив у читанні таблиці {$spreadsheetId}: HTTP {$read->status()} {$read->body()}");
+
+            throw new RuntimeException($this->explainReadFailure($read, $account));
         }
 
         $title = (string) $read->json('properties.title');
@@ -281,12 +281,44 @@ class GoogleSheetsService
             ]]]);
 
         if (! $write->successful()) {
+            Log::warning("Google відмовив у записі в таблицю {$spreadsheetId}: HTTP {$write->status()} {$write->body()}");
+
             throw new RuntimeException(
                 "Таблицю «{$title}» видно, але запис у неї заборонено — акаунту {$account} потрібен доступ саме редактора, а не глядача."
             );
         }
 
         return $title;
+    }
+
+    /**
+     * Людська причина, чому Google не віддав таблицю: самим доступом
+     * справа вирішується не завжди — Excel-файл на Drive чи корпоративна
+     * заборона ділитися назовні дають відмову навіть при доступі «всім».
+     */
+    private function explainReadFailure(Response $response, string $account): string
+    {
+        $googleMessage = (string) $response->json('error.message');
+
+        // Завантажений .xlsx відкривається в Google Таблицях, але Sheets API з ним не працює.
+        if ($response->status() === 400 && str_contains($googleMessage, 'not supported for this document')) {
+            return 'Це файл Excel (.xlsx), а не Google Таблиця — Google не дає працювати з ним через API. '
+                .'Відкрийте його і виберіть «Файл → Зберегти як Google Таблицю», потім вставте посилання на нову таблицю '
+                ."і дайте в ній доступ редактора акаунту {$account}.";
+        }
+
+        if ($response->status() === 404) {
+            return 'Таблицю за цим посиланням не знайдено — скопіюйте адресу з рядка браузера, відкривши саму таблицю.';
+        }
+
+        if ($response->status() === 403) {
+            return "Google не пускає акаунт {$account} до таблиці. Натисніть «Поділитися» і додайте саме цю адресу редактором. "
+                .'Якщо таблиця на робочому (корпоративному) акаунті, доступ «усім, у кого є посилання» діє лише всередині компанії, '
+                .'а ділитися із зовнішніми адресами може бути заборонено адміністратором — тоді створіть таблицю на особистому Gmail.';
+        }
+
+        return "Google не віддав таблицю (HTTP {$response->status()}".($googleMessage !== '' ? ": {$googleMessage}" : '').'). '
+            ."Перевірте посилання і доступ редактора для акаунту {$account}.";
     }
 
     /**
