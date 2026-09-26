@@ -721,6 +721,10 @@ onMounted(async () => {
                         <a v-if="noteLink(task.note)" :href="noteLink(task.note)" target="_blank" rel="noopener" class="note-link">посилання</a>
                         {{ noteText(task.note) }}
                       </span>
+                      <span v-if="task.bitrix_state === 'unlinked'" class="task-note" title="У Бітріксі задачу видалили або зняли з неї тег «План» — у плані вона лишилась, але більше не синхронізується">
+                        поза Бітріксом
+                      </span>
+                      <a v-else-if="task.bitrix_url" :href="task.bitrix_url" target="_blank" rel="noopener" class="task-note note-link" title="Задача в Бітрікс24 з тегом «План»">Бітрікс24</a>
                     </div>
                   </div>
                 </td>

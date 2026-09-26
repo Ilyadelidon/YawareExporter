@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\BitrixWorkspace;
 use App\Models\Employee;
 use App\Models\PlanProject;
 use App\Models\PlanSection;
@@ -64,7 +65,10 @@ class PlanProjectController extends Controller
 
         $members = $project->members()->orderBy('name')->get(['employees.id', 'name', 'position', 'current_plan_task_id']);
 
+        $portalUrl = BitrixWorkspace::active()?->portal_url;
+
         $tasks = $project->tasks()->get()->map(fn (PlanTask $task) => [
+            ...PlanTaskController::bitrixPayload($task, $portalUrl),
             'id' => $task->id,
             'section_id' => $task->plan_section_id,
             'employee_id' => $task->employee_id,

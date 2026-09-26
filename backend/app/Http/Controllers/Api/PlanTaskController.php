@@ -3,10 +3,13 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\BitrixWorkspace;
 use App\Models\Employee;
 use App\Models\PlanProject;
 use App\Models\PlanTask;
 use App\Models\PlanTaskDay;
+use App\Services\BitrixService;
+use App\Services\PlanBitrixSync;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -51,6 +54,8 @@ class PlanTaskController extends Controller
             'position' => (int) PlanTask::where('plan_project_id', $project->id)->max('position') + 1,
         ]);
 
+        PlanBitrixSync::queuePush($task, $user);
+
         return response()->json(['data' => $this->payload($task)], 201);
     }
 
@@ -81,9 +86,13 @@ class PlanTaskController extends Controller
             unset($validated['section_id']);
         }
 
-        DB::transaction(function () use ($task, $validated) {
+        $synced = false;
+
+        DB::transaction(function () use ($task, $validated, &$synced) {
             $previousEmployeeId = $task->employee_id;
             $task->update($validated);
+            // Розділ живе лише в сервісі — у Бітрікс ідуть тільки спільні поля.
+            $synced = $task->wasChanged(['title', 'note', 'status', 'employee_id']);
 
             // Закрита чи передана задача вже не «поточна» для попереднього виконавця.
             if (in_array($task->status, PlanTask::INACTIVE_STATUSES, true) || $task->employee_id !== $previousEmployeeId) {
@@ -93,6 +102,10 @@ class PlanTaskController extends Controller
             }
         });
 
+        if ($synced) {
+            PlanBitrixSync::queuePush($task, $user);
+        }
+
         return response()->json(['data' => $this->payload($task->fresh())]);
     }
 
@@ -100,6 +113,7 @@ class PlanTaskController extends Controller
     {
         $this->authorizeEdit($request, $task);
 
+        PlanBitrixSync::queueTagRemoval($task, $request->user());
         $task->delete();
 
         return response()->json(['ok' => true]);
@@ -144,15 +158,22 @@ class PlanTaskController extends Controller
     {
         $this->authorizeEdit($request, $task);
 
-        DB::transaction(function () use ($task) {
+        $statusChanged = false;
+
+        DB::transaction(function () use ($task, &$statusChanged) {
             Employee::whereKey($task->employee_id)->update(['current_plan_task_id' => $task->id]);
 
             PlanTaskDay::firstOrCreate(['plan_task_id' => $task->id, 'date' => now()->toDateString()]);
 
             if (in_array($task->status, [PlanTask::STATUS_PENDING, ...PlanTask::INACTIVE_STATUSES], true)) {
                 $task->update(['status' => PlanTask::STATUS_IN_PROGRESS]);
+                $statusChanged = true;
             }
         });
+
+        if ($statusChanged) {
+            PlanBitrixSync::queuePush($task, $request->user());
+        }
 
         return response()->json(['data' => $this->payload($task->fresh())]);
     }
@@ -207,6 +228,30 @@ class PlanTaskController extends Controller
             'note' => $task->note,
             'status' => $task->status,
             'position' => $task->position,
+            ...self::bitrixPayload($task, BitrixWorkspace::active()?->portal_url),
+        ];
+    }
+
+    /**
+     * Звʼязок задачі з Бітріксом для інтерфейсу: посилання і стан —
+     * linked / pending (ще не дійшло) / unlinked (у Бітріксі зникла) / null.
+     *
+     * @return array{bitrix_url: ?string, bitrix_state: ?string}
+     */
+    public static function bitrixPayload(PlanTask $task, ?string $portalUrl): array
+    {
+        $state = match (true) {
+            $task->bitrix_unlinked_at !== null => 'unlinked',
+            $task->bitrix_pending => 'pending',
+            $task->bitrix_task_id !== null => 'linked',
+            default => null,
+        };
+
+        return [
+            'bitrix_url' => $task->bitrix_task_id && $portalUrl
+                ? BitrixService::taskLink($portalUrl, $task->bitrix_task_id, $task->bitrix_snapshot['responsible'] ?? null)
+                : null,
+            'bitrix_state' => $state,
         ];
     }
 }

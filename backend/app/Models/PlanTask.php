@@ -7,7 +7,10 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-#[Fillable(['plan_project_id', 'plan_section_id', 'employee_id', 'title', 'note', 'status', 'position'])]
+#[Fillable([
+    'plan_project_id', 'plan_section_id', 'employee_id', 'title', 'note', 'status', 'position',
+    'bitrix_task_id', 'bitrix_snapshot', 'bitrix_pending', 'bitrix_unlinked_at',
+])]
 class PlanTask extends Model
 {
     public const STATUS_PENDING = 'pending';
@@ -41,6 +44,15 @@ class PlanTask extends Model
         self::STATUS_DONE,
         self::STATUS_NOT_RELEVANT,
     ];
+
+    protected function casts(): array
+    {
+        return [
+            'bitrix_snapshot' => 'array',
+            'bitrix_pending' => 'boolean',
+            'bitrix_unlinked_at' => 'datetime',
+        ];
+    }
 
     public function project(): BelongsTo
     {

@@ -63,6 +63,103 @@ class BitrixService implements TaskProvider
             : new self;
     }
 
+    /** Інстанс від імені конкретного акаунта — для синхронізації планів. */
+    public static function forAccount(BitrixAccount $account): self
+    {
+        return new self($account, BitrixWorkspace::active()?->portal_url);
+    }
+
+    public function account(): ?BitrixAccount
+    {
+        return $this->account;
+    }
+
+    /**
+     * Усі задачі з тегом, які бачить власник токена. Без кешу: синхронізація
+     * планів має бачити свіжий стан, а не відповідь хвилинної давнини.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function tasksWithTag(string $tag, array $select = ['ID', 'TITLE', 'DESCRIPTION', 'STATUS', 'RESPONSIBLE_ID']): array
+    {
+        $tasks = [];
+        $start = 0;
+
+        for ($page = 0; $page < self::MAX_PAGES; $page++) {
+            $body = $this->call('tasks.task.list', [
+                'filter' => ['TAG' => $tag],
+                'select' => $select,
+                'order' => ['ID' => 'asc'],
+                'start' => $start,
+            ]);
+
+            foreach ($body['result']['tasks'] ?? [] as $task) {
+                $tasks[] = $task;
+            }
+
+            if (! isset($body['next'])) {
+                break;
+            }
+
+            $start = (int) $body['next'];
+        }
+
+        return $tasks;
+    }
+
+    /** Одна задача разом із тегами — щоб зняти «План», не зачепивши решту. */
+    public function task(string $id): array
+    {
+        return $this->call('tasks.task.get', [
+            'taskId' => $id,
+            'select' => ['ID', 'TAGS'],
+        ])['result']['task'] ?? [];
+    }
+
+    /** Створює задачу й повертає її id. Поля — у верхньому регістрі, як їх чекає REST. */
+    public function addTask(array $fields): string
+    {
+        $id = $this->call('tasks.task.add', ['fields' => $fields])['result']['task']['id'] ?? null;
+
+        if (! $id) {
+            throw new RuntimeException('Бітрікс24 не повернув id створеної задачі.');
+        }
+
+        return (string) $id;
+    }
+
+    public function updateTask(string $id, array $fields): void
+    {
+        $this->call('tasks.task.update', ['taskId' => $id, 'fields' => $fields]);
+    }
+
+    /** id користувача порталу за поштою — для працівника, що сам Бітрікс не підключав. */
+    public function userIdByEmail(string $email): ?string
+    {
+        $id = $this->cachedCall('user.get', ['FILTER' => ['EMAIL' => $email]])['result'][0]['ID'] ?? null;
+
+        return $id === null ? null : (string) $id;
+    }
+
+    /** Пошта користувача порталу — щоб знайти виконавця серед працівників сервісу. */
+    public function userEmail(string $bitrixUserId): ?string
+    {
+        $email = $this->cachedCall('user.get', ['ID' => $bitrixUserId])['result'][0]['EMAIL'] ?? null;
+
+        return filled($email) ? (string) $email : null;
+    }
+
+    /**
+     * Посилання на задачу в інтерфейсі порталу. Користувач у шляху — лише
+     * контекст сторінки: задачу відкриє будь-хто, кому вона доступна.
+     */
+    public static function taskLink(string $portalUrl, string $taskId, ?string $userId): string
+    {
+        $userId = $userId ?: '0';
+
+        return rtrim($portalUrl, '/')."/company/personal/user/{$userId}/tasks/task/view/{$taskId}/";
+    }
+
     /**
      * Профіль власника щойно виданого токена — ним і визначається, чий це
      * акаунт. Викликається в OAuth-callback, коли акаунта в БД ще немає.
@@ -262,7 +359,7 @@ class BitrixService implements TaskProvider
      * Опис таски приходить у BB-коді (або HTML, якщо портал так налаштований) —
      * у звіті потрібен звичайний текст.
      */
-    private function plainText(string $value): string
+    public static function plainText(string $value): string
     {
         $value = preg_replace('/\[url=([^\]]+)\](.*?)\[\/url\]/is', '$2 ($1)', $value) ?? $value;
         $value = preg_replace('/\[\/?[a-z][^\]]*\]/i', '', $value) ?? $value;
