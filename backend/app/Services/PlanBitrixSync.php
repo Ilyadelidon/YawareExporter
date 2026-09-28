@@ -127,7 +127,8 @@ class PlanBitrixSync
         // Токени особисті: кожен бачить лише доступні йому задачі, тож повний
         // набір — обʼєднання того, що бачать усі підключені працівники.
         $remote = [];
-        $reader = null;
+        // Від чийого імені прочитати вдалося — ними ж читаємо й підзадачі.
+        $readers = [];
         $complete = true;
         $projects = PlanProject::whereNull('archived_at')->get();
         // id задачі Бітрікса => id проектів, чиї теги на ній стоять. Теги
@@ -148,7 +149,7 @@ class PlanBitrixSync
                     }
                 }
 
-                $reader ??= $bitrix;
+                $readers[] = $bitrix;
             } catch (Throwable $exception) {
                 $complete = false;
                 $this->warn("Не вдалося прочитати задачі від імені {$account->bitrix_user_name}: {$exception->getMessage()}");
@@ -157,7 +158,7 @@ class PlanBitrixSync
 
         unset($remote['']);
 
-        if ($reader === null) {
+        if ($readers === []) {
             return $this->summary;
         }
 
@@ -204,7 +205,63 @@ class PlanBitrixSync
             ->whereNull('bitrix_unlinked_at')
             ->each(fn (PlanTask $task) => $this->push($task, null));
 
+        if ($complete) {
+            $this->syncSubtasks($readers);
+        }
+
         return $this->summary;
+    }
+
+    /**
+     * Підзадачі звʼязаних задач — звичайні задачі Бітрікса, з яких і
+     * складаються звіти. У плані вони лише для перегляду, тож просто
+     * переписуємо список. Кожен бачить свої задачі — обʼєднуємо всіх; не
+     * зміг прочитати хтось один — лишаємо попередні списки, щоб не загубити
+     * видимі лише йому.
+     *
+     * @param  list<BitrixService>  $readers
+     */
+    private function syncSubtasks(array $readers): void
+    {
+        $tasks = PlanTask::whereNotNull('bitrix_task_id')->whereNull('bitrix_unlinked_at')->get();
+
+        if ($tasks->isEmpty()) {
+            return;
+        }
+
+        $parentIds = $tasks->pluck('bitrix_task_id')->map(fn ($id) => (string) $id)->all();
+        $found = collect();
+
+        foreach ($readers as $bitrix) {
+            try {
+                // Ту саму підзадачу бачать кілька людей — лишаємо першу.
+                $found = $found->union(collect($bitrix->subtasks($parentIds))->keyBy(fn (array $subtask) => (string) ($subtask['id'] ?? '')));
+            } catch (Throwable $exception) {
+                $this->warn("Не вдалося прочитати підзадачі: {$exception->getMessage()}");
+
+                return;
+            }
+        }
+
+        $byParent = $found->except([''])
+            ->sortBy(fn (array $subtask) => (int) $subtask['id'])
+            ->groupBy(fn (array $subtask) => (string) ($subtask['parentId'] ?? ''));
+
+        // Підзадачі — не правка задачі плану: updated_at не чіпаємо.
+        PlanTask::withoutTimestamps(fn () => $tasks->each(function (PlanTask $task) use ($byParent) {
+            $subtasks = ($byParent[$task->bitrix_task_id] ?? collect())
+                ->map(fn (array $subtask) => [
+                    'id' => (string) $subtask['id'],
+                    'title' => mb_substr((string) ($subtask['title'] ?? ''), 0, 1000),
+                    'responsible' => (string) ($subtask['responsibleId'] ?? ''),
+                ])
+                ->values()
+                ->all();
+
+            if ($subtasks !== ($task->bitrix_subtasks ?? [])) {
+                $task->forceFill(['bitrix_subtasks' => $subtasks])->save();
+            }
+        }));
     }
 
     /**

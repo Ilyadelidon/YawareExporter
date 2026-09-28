@@ -236,7 +236,9 @@ class PlanTaskController extends Controller
      * Звʼязок задачі з Бітріксом для інтерфейсу: посилання і стан —
      * linked / pending (ще не дійшло) / unlinked (у Бітріксі зникла) / null.
      *
-     * @return array{bitrix_url: ?string, bitrix_state: ?string}
+     * Підзадачі — з Бітрікса, лише для перегляду.
+     *
+     * @return array{bitrix_url: ?string, bitrix_state: ?string, subtasks: list<array{id: string, title: string, url: ?string}>}
      */
     public static function bitrixPayload(PlanTask $task, ?string $portalUrl): array
     {
@@ -252,6 +254,11 @@ class PlanTaskController extends Controller
                 ? BitrixService::taskLink($portalUrl, $task->bitrix_task_id, $task->bitrix_snapshot['responsible'] ?? null)
                 : null,
             'bitrix_state' => $state,
+            'subtasks' => array_map(fn (array $subtask) => [
+                'id' => $subtask['id'],
+                'title' => $subtask['title'],
+                'url' => $portalUrl ? BitrixService::taskLink($portalUrl, $subtask['id'], $subtask['responsible'] ?: null) : null,
+            ], $task->bitrix_subtasks ?? []),
         ];
     }
 }

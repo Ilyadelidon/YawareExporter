@@ -82,26 +82,30 @@ class BitrixService implements TaskProvider
      */
     public function tasksWithTag(string $tag, array $select = ['ID', 'TITLE', 'DESCRIPTION', 'STATUS', 'RESPONSIBLE_ID']): array
     {
+        return $this->listTasks([
+            'filter' => ['TAG' => $tag],
+            'select' => $select,
+            'order' => ['ID' => 'asc'],
+        ]);
+    }
+
+    /**
+     * Підзадачі кількох задач одразу — фільтр PARENT_ID приймає список.
+     * Список ділимо на порції, щоб не впертися в розмір запиту.
+     *
+     * @param  list<string>  $parentIds
+     * @return array<int, array<string, mixed>>
+     */
+    public function subtasks(array $parentIds): array
+    {
         $tasks = [];
-        $start = 0;
 
-        for ($page = 0; $page < self::MAX_PAGES; $page++) {
-            $body = $this->call('tasks.task.list', [
-                'filter' => ['TAG' => $tag],
-                'select' => $select,
+        foreach (array_chunk(array_values($parentIds), 50) as $chunk) {
+            array_push($tasks, ...$this->listTasks([
+                'filter' => ['PARENT_ID' => $chunk],
+                'select' => ['ID', 'TITLE', 'PARENT_ID', 'RESPONSIBLE_ID'],
                 'order' => ['ID' => 'asc'],
-                'start' => $start,
-            ]);
-
-            foreach ($body['result']['tasks'] ?? [] as $task) {
-                $tasks[] = $task;
-            }
-
-            if (! isset($body['next'])) {
-                break;
-            }
-
-            $start = (int) $body['next'];
+            ]));
         }
 
         return $tasks;
@@ -281,25 +285,37 @@ class BitrixService implements TaskProvider
 
     private function fetchTasks(array $filter): array
     {
+        return $this->listTasks([
+            'filter' => $filter + ['RESPONSIBLE_ID' => $this->account->bitrix_user_id],
+            // select у верхньому регістрі, а от у відповіді Бітрікс віддає
+            // ті самі поля в camelCase — звідси різні написання нижче.
+            'select' => [
+                'ID', 'TITLE', 'DESCRIPTION', 'START_DATE_PLAN', 'END_DATE_PLAN',
+                'STATUS', 'RESPONSIBLE_ID',
+            ],
+            'order' => ['START_DATE_PLAN' => 'asc'],
+        ], cached: true);
+    }
+
+    /**
+     * Усі сторінки tasks.task.list (по 50 записів) — до запобіжника MAX_PAGES.
+     * Кеш — для звіту, який опитує таски полінгом; синхронізації планів
+     * потрібен свіжий стан.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function listTasks(array $params, bool $cached = false): array
+    {
         $tasks = [];
         $start = 0;
 
         for ($page = 0; $page < self::MAX_PAGES; $page++) {
-            $body = $this->cachedCall('tasks.task.list', [
-                'filter' => $filter + ['RESPONSIBLE_ID' => $this->account->bitrix_user_id],
-                // select у верхньому регістрі, а от у відповіді Бітрікс віддає
-                // ті самі поля в camelCase — звідси різні написання нижче.
-                'select' => [
-                    'ID', 'TITLE', 'DESCRIPTION', 'START_DATE_PLAN', 'END_DATE_PLAN',
-                    'STATUS', 'RESPONSIBLE_ID',
-                ],
-                'order' => ['START_DATE_PLAN' => 'asc'],
-                'start' => $start,
-            ]);
+            $request = $params + ['start' => $start];
+            $body = $cached
+                ? $this->cachedCall('tasks.task.list', $request)
+                : $this->call('tasks.task.list', $request);
 
-            foreach ($body['result']['tasks'] ?? [] as $task) {
-                $tasks[] = $task;
-            }
+            array_push($tasks, ...($body['result']['tasks'] ?? []));
 
             if (! isset($body['next'])) {
                 break;

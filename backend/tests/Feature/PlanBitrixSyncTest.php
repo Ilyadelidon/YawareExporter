@@ -71,12 +71,16 @@ class PlanBitrixSyncTest extends TestCase
 
         switch ($method) {
             case 'tasks.task.list':
+                if (isset($params['filter']['PARENT_ID'])) {
+                    $parents = array_map('strval', (array) $params['filter']['PARENT_ID']);
+
+                    return $this->taskList(fn (array $task) => in_array((string) ($task['parentId'] ?? ''), $parents, true));
+                }
+
                 $tag = $params['filter']['TAG'] ?? null;
                 // Фільтр за тегом у Бітріксі не зважає на регістр.
-                $tasks = array_values(array_filter($this->portalTasks, fn (array $task) => in_array(mb_strtolower($tag), array_map('mb_strtolower', $task['tags']), true)));
 
-                // Як і справжній портал, теги в списку не віддаємо.
-                return Http::response(['result' => ['tasks' => array_map(fn (array $task) => array_diff_key($task, ['tags' => 1]), $tasks)]]);
+                return $this->taskList(fn (array $task) => in_array(mb_strtolower($tag), array_map('mb_strtolower', $task['tags']), true));
 
             case 'tasks.task.get':
                 $task = $this->portalTasks[(string) $params['taskId']];
@@ -110,6 +114,14 @@ class PlanBitrixSyncTest extends TestCase
         }
 
         return Http::response(['error' => 'ERROR_METHOD_NOT_FOUND'], 404);
+    }
+
+    /** Відповідь tasks.task.list: як і справжній портал, теги в списку не віддаємо. */
+    private function taskList(callable $matches)
+    {
+        $tasks = array_values(array_filter($this->portalTasks, $matches));
+
+        return Http::response(['result' => ['tasks' => array_map(fn (array $task) => array_diff_key($task, ['tags' => 1]), $tasks)]]);
     }
 
     private function applyFields(array $task, array $fields): array
@@ -214,6 +226,43 @@ class PlanBitrixSyncTest extends TestCase
         $this->sync();
         $this->assertSame(1, PlanTask::count());
         $this->assertSame(PlanTask::STATUS_IN_PROGRESS, $task->fresh()->status);
+    }
+
+    public function test_subtasks_of_plan_task_are_shown_with_links(): void
+    {
+        $ivan = $this->employee('Іван Петренко', '7');
+        $project = $this->project('Brok', $ivan);
+        $this->remoteTask('101', ['title' => 'Інтеграція оплат']);
+        $this->remoteTask('201', ['title' => 'API Monobank', 'parentId' => '101', 'tags' => []]);
+        $this->remoteTask('202', ['title' => 'Webhook-и', 'parentId' => '101', 'responsibleId' => '9', 'tags' => []]);
+        $this->remoteTask('203', ['title' => 'Чужа підзадача', 'parentId' => '999', 'tags' => []]);
+
+        $this->sync();
+
+        // Підзадачі — не задачі плану: окремими рядками вони не зʼявляються.
+        $this->assertSame(1, PlanTask::count());
+
+        Sanctum::actingAs($ivan->user);
+
+        $this->getJson("/api/plans/projects/{$project->id}")
+            ->assertJsonPath('tasks.0.subtasks', [
+                ['id' => '201', 'title' => 'API Monobank', 'url' => self::PORTAL.'/company/personal/user/7/tasks/task/view/201/'],
+                ['id' => '202', 'title' => 'Webhook-и', 'url' => self::PORTAL.'/company/personal/user/9/tasks/task/view/202/'],
+            ]);
+
+        // Підзадачу перейменували, іншу відвʼязали — список просто переписується,
+        // а сама задача плану не вважається зміненою.
+        $updatedAt = PlanTask::first()->updated_at;
+        $this->travel(10)->minutes();
+        $this->portalTasks['201']['title'] = 'API Monobank v2';
+        $this->portalTasks['202']['parentId'] = '';
+
+        $this->sync();
+
+        $task = PlanTask::first();
+        $this->assertSame([['id' => '201', 'title' => 'API Monobank v2', 'responsible' => '7']], $task->bitrix_subtasks);
+        $this->assertEquals($updatedAt, $task->updated_at);
+        $this->assertSame([], $this->writes);
     }
 
     public function test_task_tagged_in_bitrix_is_pulled_into_plan_of_matching_project(): void

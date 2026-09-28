@@ -50,9 +50,14 @@ const dayPopover = ref(null);
 const dayEdit = ref(null);
 const daySaving = ref(false);
 const sheetPanel = ref(null);
+// Задачі, розгорнуті до підзадач Бітрікса.
+const expanded = ref(new Set());
 
 const projectId = computed(() => Number(route.query.project) || null);
 const canManage = computed(() => Boolean(plan.value?.can_manage));
+// Місце під стрілку підзадач резервуємо, лише якщо вони взагалі є в плані,
+// інакше назви задач змістились би дарма.
+const hasSubtasks = computed(() => Boolean(plan.value?.tasks.some((task) => task.subtasks?.length)));
 
 // Підпис кнопки каже, що станеться по кліку: без привʼязаної таблиці це не
 // експорт, а вікно підключення.
@@ -254,6 +259,13 @@ function selectProject(id) {
 
 function openNewTask(sectionId = null) {
   taskDialog.value = { visible: true, task: null, sectionId };
+}
+
+function toggleSubtasks(task) {
+  const next = new Set(expanded.value);
+  if (next.has(task.id)) next.delete(task.id);
+  else next.add(task.id);
+  expanded.value = next;
 }
 
 function openTask(task) {
@@ -687,75 +699,101 @@ onMounted(async () => {
                 </td>
                 <td :colspan="days.length" class="section-fill"></td>
               </tr>
-              <tr
-                v-for="task in group.tasks"
-                :key="task.id"
-                class="task-row"
-                :class="{ 'is-closed': task.status === 'done' || task.status === 'not_relevant', 'is-current': isCurrent(task) }"
-              >
-                <td class="col-task">
-                  <div class="task-cell">
-                    <button
-                      v-if="canEdit(task) && !['done', 'not_relevant'].includes(task.status) || isCurrent(task)"
-                      type="button"
-                      class="now-btn"
-                      :class="{ 'is-on': isCurrent(task) }"
-                      :disabled="!canEdit(task)"
-                      :title="isCurrent(task) ? 'Зараз працює над цією задачею. Натисніть, щоб зняти' : 'Працюю над цим зараз'"
-                      @click="toggleCurrent(task)"
-                    >
-                      <span v-if="isCurrent(task)" class="now-dot"></span>
-                      <svg v-else width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"></polygon></svg>
-                    </button>
-                    <span v-else class="now-spacer"></span>
-                    <div class="task-text">
+              <template v-for="task in group.tasks" :key="task.id">
+                <tr
+                  class="task-row"
+                  :class="{ 'is-closed': task.status === 'done' || task.status === 'not_relevant', 'is-current': isCurrent(task) }"
+                >
+                  <td class="col-task">
+                    <div class="task-cell">
                       <button
-                        v-if="canEdit(task)"
+                        v-if="canEdit(task) && !['done', 'not_relevant'].includes(task.status) || isCurrent(task)"
                         type="button"
-                        class="task-title is-editable"
-                        :title="task.title"
-                        @click="openTask(task)"
-                      >{{ task.title }}</button>
-                      <span v-else class="task-title" :title="task.title">{{ task.title }}</span>
-                      <span v-if="task.note" class="task-note" :title="task.note">
-                        <a v-if="noteLink(task.note)" :href="noteLink(task.note)" target="_blank" rel="noopener" class="note-link">посилання</a>
-                        {{ noteText(task.note) }}
-                      </span>
-                      <span v-if="task.bitrix_state === 'unlinked'" class="task-note" title="У Бітріксі задачу видалили або зняли з неї тег «План» — у плані вона лишилась, але більше не синхронізується">
-                        поза Бітріксом
-                      </span>
-                      <a v-else-if="task.bitrix_url" :href="task.bitrix_url" target="_blank" rel="noopener" class="task-note note-link" title="Задача в Бітрікс24 з тегом «План»">Бітрікс24</a>
+                        class="now-btn"
+                        :class="{ 'is-on': isCurrent(task) }"
+                        :disabled="!canEdit(task)"
+                        :title="isCurrent(task) ? 'Зараз працює над цією задачею. Натисніть, щоб зняти' : 'Працюю над цим зараз'"
+                        @click="toggleCurrent(task)"
+                      >
+                        <span v-if="isCurrent(task)" class="now-dot"></span>
+                        <svg v-else width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"></polygon></svg>
+                      </button>
+                      <span v-else class="now-spacer"></span>
+                      <button
+                        v-if="task.subtasks?.length"
+                        type="button"
+                        class="subtasks-toggle"
+                        :class="{ 'is-open': expanded.has(task.id) }"
+                        :title="expanded.has(task.id) ? 'Згорнути підзадачі' : 'Підзадачі в Бітрікс24'"
+                        :aria-expanded="expanded.has(task.id)"
+                        @click="toggleSubtasks(task)"
+                      >
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="9 6 15 12 9 18"></polyline></svg>
+                        {{ task.subtasks.length }}
+                      </button>
+                      <span v-else-if="hasSubtasks" class="subtasks-spacer"></span>
+                      <div class="task-text">
+                        <button
+                          v-if="canEdit(task)"
+                          type="button"
+                          class="task-title is-editable"
+                          :title="task.title"
+                          @click="openTask(task)"
+                        >{{ task.title }}</button>
+                        <span v-else class="task-title" :title="task.title">{{ task.title }}</span>
+                        <span v-if="task.note" class="task-note" :title="task.note">
+                          <a v-if="noteLink(task.note)" :href="noteLink(task.note)" target="_blank" rel="noopener" class="note-link">посилання</a>
+                          {{ noteText(task.note) }}
+                        </span>
+                        <span v-if="task.bitrix_state === 'unlinked'" class="task-note" title="У Бітріксі задачу видалили або зняли з неї тег «План» — у плані вона лишилась, але більше не синхронізується">
+                          поза Бітріксом
+                        </span>
+                        <a v-else-if="task.bitrix_url" :href="task.bitrix_url" target="_blank" rel="noopener" class="task-note note-link" title="Задача в Бітрікс24 з тегом «План»">Бітрікс24</a>
+                      </div>
                     </div>
-                  </div>
-                </td>
-                <td class="col-person" :title="shortName(task.employee_id)">{{ shortName(task.employee_id) }}</td>
-                <td class="col-status">
-                  <select
-                    v-if="canEdit(task)"
-                    class="status-select"
-                    :class="`is-${task.status}`"
-                    :value="task.status"
-                    @change="changeStatus(task, $event.target.value)"
-                  >
-                    <option v-for="(label, key) in plan.statuses" :key="key" :value="key">{{ label }}</option>
-                  </select>
-                  <span v-else class="status-text" :class="`is-${task.status}`">{{ statusLabel(task.status) }}</span>
-                </td>
-                <td
-                  v-for="d in days"
-                  :key="d.iso"
-                  class="col-day day-cell"
-                  :class="{
-                    'is-weekend': d.weekend,
-                    'is-today': d.today,
-                    'is-worked': Object.hasOwn(task.days, d.iso),
-                    'is-now': d.today && isCurrent(task),
-                    'is-editable': canEdit(task) && !d.future,
-                  }"
-                  :title="dayTitle(task, d)"
-                  @click="onDayClick($event, task, d)"
-                ></td>
-              </tr>
+                  </td>
+                  <td class="col-person" :title="shortName(task.employee_id)">{{ shortName(task.employee_id) }}</td>
+                  <td class="col-status">
+                    <select
+                      v-if="canEdit(task)"
+                      class="status-select"
+                      :class="`is-${task.status}`"
+                      :value="task.status"
+                      @change="changeStatus(task, $event.target.value)"
+                    >
+                      <option v-for="(label, key) in plan.statuses" :key="key" :value="key">{{ label }}</option>
+                    </select>
+                    <span v-else class="status-text" :class="`is-${task.status}`">{{ statusLabel(task.status) }}</span>
+                  </td>
+                  <td
+                    v-for="d in days"
+                    :key="d.iso"
+                    class="col-day day-cell"
+                    :class="{
+                      'is-weekend': d.weekend,
+                      'is-today': d.today,
+                      'is-worked': Object.hasOwn(task.days, d.iso),
+                      'is-now': d.today && isCurrent(task),
+                      'is-editable': canEdit(task) && !d.future,
+                    }"
+                    :title="dayTitle(task, d)"
+                    @click="onDayClick($event, task, d)"
+                  ></td>
+                </tr>
+                <template v-if="expanded.has(task.id)">
+                  <tr v-for="subtask in task.subtasks" :key="`${task.id}-${subtask.id}`" class="subtask-row">
+                    <td class="col-task">
+                      <div class="subtask-cell">
+                        <a v-if="subtask.url" :href="subtask.url" target="_blank" rel="noopener" class="subtask-title" :title="subtask.title">{{ subtask.title }}</a>
+                        <span v-else class="subtask-title" :title="subtask.title">{{ subtask.title }}</span>
+                      </div>
+                    </td>
+                    <td class="col-person"></td>
+                    <td class="col-status"></td>
+                    <td :colspan="days.length"></td>
+                  </tr>
+                </template>
+              </template>
             </tbody>
           </table>
         </div>
@@ -1261,6 +1299,66 @@ onMounted(async () => {
   border-radius: 50% !important;
   background: var(--accent);
   animation: pulseDot 1.4s ease-in-out infinite;
+}
+
+.subtasks-toggle,
+.subtasks-spacer {
+  flex-shrink: 0;
+  width: 30px;
+}
+
+.subtasks-toggle {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 22px;
+  padding: 0 2px;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+
+.subtasks-toggle:hover {
+  color: var(--accent);
+}
+
+.subtasks-toggle svg {
+  transition: transform 0.15s ease;
+}
+
+.subtasks-toggle.is-open svg {
+  transform: rotate(90deg);
+}
+
+.plan-sheet .subtask-row td {
+  height: 30px;
+}
+
+.subtask-cell {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  /* Відступ до рівня назви задачі: «зараз» + стрілка підзадач + проміжки. */
+  padding-left: 68px;
+}
+
+.subtask-title {
+  font-size: 12.5px;
+  color: #2f3437;
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+a.subtask-title:hover {
+  color: var(--accent);
+  text-decoration: underline;
 }
 
 .task-text {
