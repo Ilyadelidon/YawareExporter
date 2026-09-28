@@ -54,8 +54,10 @@ class HintController extends Controller
     }
 
     /**
-     * Будні без готового звіту: звіту немає, генерація впала або звіт
-     * заблоковано через час поза тасками. Той, що формується, пропуском не є.
+     * Будні без готового звіту: звіту немає, генерація впала, звіт
+     * заблоковано через час поза тасками або він готовий лише формально —
+     * без тасок чи без вивантаження в Google (incomplete). Той, що
+     * формується, пропуском не є.
      *
      * @param  list<string>  $days
      * @return list<array{date: string, status: string}>
@@ -68,15 +70,17 @@ class HintController extends Controller
 
         $statuses = Report::where('employee_id', $employeeId)
             ->whereBetween('report_date', [$days[0], end($days)])
-            ->get(['report_date', 'status'])
-            ->mapWithKeys(fn (Report $report) => [$report->report_date->toDateString() => $report->status]);
+            ->get(['report_date', 'status', 'summary', 'tasks'])
+            ->mapWithKeys(fn (Report $report) => [
+                $report->report_date->toDateString() => $report->isIncomplete() ? 'incomplete' : $report->status,
+            ]);
 
         $missing = [];
 
         foreach (array_reverse($days) as $day) {
             $status = $statuses[$day] ?? 'none';
 
-            if (in_array($status, ['none', Report::STATUS_FAILED, Report::STATUS_BLOCKED], true)) {
+            if (in_array($status, ['none', 'incomplete', Report::STATUS_FAILED, Report::STATUS_BLOCKED], true)) {
                 $missing[] = ['date' => $day, 'status' => $status];
             }
         }

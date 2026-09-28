@@ -34,6 +34,27 @@ class Report extends Model
         ];
     }
 
+    /**
+     * Готовий лише формально: тасок немає (тоді немає ні файлу, ні вкладки)
+     * або трекер їх не віддав, чи звіт не дійшов до Google Таблиці. Для
+     * працівника це той самий несформований звіт — його треба перегенерувати.
+     * День без активності в Yaware (відпустка) неповним не вважається.
+     */
+    public function isIncomplete(): bool
+    {
+        if ($this->status !== self::STATUS_COMPLETED) {
+            return false;
+        }
+
+        $summary = $this->summary ?? [];
+
+        if (str_contains((string) ($summary['Результат'] ?? ''), 'без активності')) {
+            return false;
+        }
+
+        return empty($this->tasks) || empty($summary['Google Таблиця']);
+    }
+
     public function employee(): BelongsTo
     {
         return $this->belongsTo(Employee::class);

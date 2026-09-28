@@ -38,7 +38,10 @@ class HintsTest extends TestCase
     public function test_lists_weekdays_without_ready_report_except_today(): void
     {
         $employee = $this->employee();
-        Report::create(['employee_id' => $employee->id, 'report_date' => '2026-09-22', 'status' => Report::STATUS_COMPLETED]);
+        Report::create([
+            'employee_id' => $employee->id, 'report_date' => '2026-09-22', 'status' => Report::STATUS_COMPLETED,
+            'summary' => ['Google Таблиця' => 'https://docs.google.com/spreadsheets/d/x/edit'], 'tasks' => [['name' => 'Задача']],
+        ]);
         Report::create(['employee_id' => $employee->id, 'report_date' => '2026-09-21', 'status' => Report::STATUS_BLOCKED]);
         Report::create(['employee_id' => $employee->id, 'report_date' => '2026-09-18', 'status' => Report::STATUS_PROCESSING]);
         Report::create(['employee_id' => $employee->id, 'report_date' => '2026-09-16', 'status' => Report::STATUS_FAILED]);
@@ -51,6 +54,31 @@ class HintsTest extends TestCase
             ->assertJsonPath('reports', [
                 ['date' => '2026-09-21', 'status' => 'blocked'],
                 ['date' => '2026-09-17', 'status' => 'none'],
+            ]);
+    }
+
+    public function test_completed_report_without_tasks_or_google_counts_as_missing(): void
+    {
+        $employee = $this->employee();
+        $sheet = ['Google Таблиця' => 'https://docs.google.com/spreadsheets/d/x/edit'];
+        $task = [['name' => 'Задача']];
+
+        // Повний: таски є і вивантажено в Google.
+        Report::create(['employee_id' => $employee->id, 'report_date' => '2026-09-22', 'status' => Report::STATUS_COMPLETED, 'summary' => $sheet, 'tasks' => $task]);
+        // Тасок немає — ні файлу, ні вкладки.
+        Report::create(['employee_id' => $employee->id, 'report_date' => '2026-09-21', 'status' => Report::STATUS_COMPLETED, 'summary' => ['Попередження' => 'тасок немає'], 'tasks' => []]);
+        // Таски є, але Google не прийняв.
+        Report::create(['employee_id' => $employee->id, 'report_date' => '2026-09-18', 'status' => Report::STATUS_COMPLETED, 'summary' => ['Попередження' => 'не вивантажено'], 'tasks' => $task]);
+        // День без активності (відпустка) — не пропуск.
+        Report::create(['employee_id' => $employee->id, 'report_date' => '2026-09-17', 'status' => Report::STATUS_COMPLETED, 'summary' => ['Результат' => 'День без активності в Yaware — історія і Google Таблиця не оновлювались.'], 'tasks' => []]);
+
+        Sanctum::actingAs($employee->user);
+
+        $this->getJson('/api/hints')
+            ->assertOk()
+            ->assertJsonPath('reports', [
+                ['date' => '2026-09-21', 'status' => 'incomplete'],
+                ['date' => '2026-09-18', 'status' => 'incomplete'],
             ]);
     }
 
