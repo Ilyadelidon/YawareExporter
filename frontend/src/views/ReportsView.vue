@@ -10,6 +10,7 @@ import AiAnalysisPanel from '../components/AiAnalysisPanel.vue';
 import { useAuthStore } from '../stores/auth';
 import { useHintsStore } from '../stores/hints';
 import { useReportGenerationStore } from '../stores/reportGeneration';
+import { toIsoDate } from '../utils/dates';
 
 const auth = useAuthStore();
 const generation = useReportGenerationStore();
@@ -102,12 +103,11 @@ const integrationsHint = computed(() => {
 const isHintedDay = computed(() => {
   if (auth.isAdmin || !selectedDate.value) return false;
   if (isBlocked.value || parseClock(report.value?.summary?.[TIME_KEYS.total]) > 0) return false;
-  const iso = toIso(selectedDate.value);
-  return hints.reportDays.some((item) => item.date === iso) || hints.planDays.includes(iso);
+  return hints.hasDay(toIsoDate(selectedDate.value));
 });
 
 function skipSelectedDay() {
-  hints.skip(toIso(selectedDate.value));
+  hints.skip(toIsoDate(selectedDate.value));
 }
 
 const canGenerate = computed(() => !loading.value && !generating.value && !isActive.value && integrationsOk.value && !viewingOther.value && (!auth.isAdmin || selectedEmployee.value));
@@ -180,10 +180,6 @@ function isUrl(value) {
   return typeof value === 'string' && value.startsWith('https://');
 }
 
-function toIso(date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-}
-
 // Статус звіту, що формується, политься в сторі — він не зупиняється,
 // коли сторінку покидають. Тут лише віддаємо звіт під нагляд.
 function trackIfActive() {
@@ -213,7 +209,7 @@ async function loadReport() {
     if (auth.isAdmin && !selectedEmployee.value) {
       return;
     }
-    const isoDate = toIso(selectedDate.value);
+    const isoDate = toIsoDate(selectedDate.value);
     const params = { date_from: isoDate, date_to: isoDate };
     if (auth.isAdmin) {
       params.employee_id = selectedEmployee.value;
@@ -256,7 +252,7 @@ async function generateReport() {
   tasksSnapshot.value = false;
 
   try {
-    const payload = { report_date: toIso(selectedDate.value) };
+    const payload = { report_date: toIsoDate(selectedDate.value) };
     if (auth.isAdmin) {
       payload.employee_id = selectedEmployee.value;
     }
@@ -281,7 +277,7 @@ function applyTasks() {
     trackerNotConnected.value = false;
     return;
   }
-  loadTasks(toIso(selectedDate.value));
+  loadTasks(toIsoDate(selectedDate.value));
 }
 
 async function loadTasks(date) {
@@ -364,7 +360,7 @@ onMounted(async () => {
   // Слухаємо вибір лише після першого завантаження — інакше підстановка
   // працівника в loadEmployees запустила б loadReport удруге.
   watch([selectedDate, selectedEmployee], () => {
-    generation.date = selectedDate.value ? toIso(selectedDate.value) : null;
+    generation.date = selectedDate.value ? toIsoDate(selectedDate.value) : null;
     generation.employeeId = selectedEmployee.value;
     if (selectedDate.value) {
       loadReport();

@@ -160,7 +160,7 @@ class GenerateYawareReport implements ShouldQueue
 
             $report->update([
                 'status' => Report::STATUS_COMPLETED,
-                'summary' => ['Результат' => 'День без активності в Yaware — історія і Google Таблиця не оновлювались.'],
+                'summary' => ['Результат' => Report::EMPTY_DAY_RESULT],
                 'tasks' => $tasks,
                 'generated_at' => now(),
             ]);

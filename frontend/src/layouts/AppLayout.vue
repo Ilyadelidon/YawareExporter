@@ -5,6 +5,7 @@ import { useAuthStore } from '../stores/auth';
 import { useIntegrationLinksStore } from '../stores/integrations';
 import { useHintsStore } from '../stores/hints';
 import { useReportGenerationStore } from '../stores/reportGeneration';
+import { shiftIsoDate } from '../utils/dates';
 
 const auth = useAuthStore();
 const links = useIntegrationLinksStore();
@@ -25,7 +26,7 @@ const mobileOpen = ref(false);
 
 watch(() => route.fullPath, () => {
   mobileOpen.value = false;
-  loadHints();
+  hints.load();
 });
 
 // Кнопки переходу показуємо лише для підключеного: порожній блок у меню
@@ -36,84 +37,48 @@ const trackerIcon = computed(() => (links.tracker?.provider === 'bitrix' ? 'bitr
 
 // ---- Підказки працівнику: що ще не зроблено (адміну не показуємо) ----
 
-const MONTH_DAY = (iso) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}`;
+const HINT_TEXTS = {
+  plans: { title: 'Не вказано задачі в Планах', text: 'Відмітьте, над чим працювали', tone: 'warn' },
+  report: { title: 'Не сформовано звіт', text: 'Сформуйте звіт', tone: 'warn' },
+  blocked: { title: 'Звіт чекає вашої дії', text: 'Поправте таски в трекері', tone: 'error' },
+};
 
 // «за сьогодні» / «за вчора» / «за 24.09». Вчора — саме календарне: у
 // понеділок пʼятниця вже не «вчора».
 function dayLabel(iso) {
   if (iso === hints.today) return 'за сьогодні';
-  const yesterday = new Date(`${hints.today}T00:00:00`);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const pad = (n) => String(n).padStart(2, '0');
-  if (iso === `${yesterday.getFullYear()}-${pad(yesterday.getMonth() + 1)}-${pad(yesterday.getDate())}`) return 'за вчора';
-  return `за ${MONTH_DAY(iso)}`;
+  if (iso === shiftIsoDate(hints.today, -1)) return 'за вчора';
+  return `за ${iso.slice(8, 10)}.${iso.slice(5, 7)}`;
 }
 
-function reportLink(iso) {
-  return { name: 'reports', query: { date: iso } };
+function hintLink({ kind, date }) {
+  if (kind === 'plans') {
+    return { name: 'plans', query: { ...(route.name === 'plans' ? route.query : {}), month: date.slice(0, 7) } };
+  }
+  return { name: 'reports', query: { date } };
 }
 
-function planLink(iso) {
-  return { name: 'plans', query: { ...(route.name === 'plans' ? route.query : {}), month: iso.slice(0, 7) } };
-}
-
-// Показуємо одну підказку й один день за раз. Дні приходять від найсвіжішого
-// до давнішого: закрили вчора — зʼявляється позавчора. Пріоритет підказок: спершу відмітити задачі в
-// Планах, потім сформувати пропущені звіти, і лише тоді — звіти, що чекають
-// правки тасок у трекері (заблокований звіт не «сформувати» одразу).
 const activeHint = computed(() => {
-  if (hints.planDays.length) {
-    return {
-      title: 'Не вказано задачі в Планах',
-      text: 'Відмітьте, над чим працювали',
-      tone: 'warn',
-      day: { iso: hints.planDays[0], to: planLink(hints.planDays[0]) },
-    };
-  }
-
-  const missing = hints.reportDays.filter((item) => item.status !== 'blocked');
-  if (missing.length) {
-    return {
-      title: 'Не сформовано звіт',
-      text: 'Сформуйте звіт',
-      tone: 'warn',
-      day: { iso: missing[0].date, to: reportLink(missing[0].date) },
-    };
-  }
-
-  const blocked = hints.reportDays.filter((item) => item.status === 'blocked');
-  if (blocked.length) {
-    return {
-      title: 'Звіт чекає вашої дії',
-      text: 'Поправте таски в трекері',
-      tone: 'error',
-      day: { iso: blocked[0].date, to: reportLink(blocked[0].date) },
-    };
-  }
-
-  return null;
+  const hint = hints.active;
+  if (!hint) return null;
+  const texts = HINT_TEXTS[hint.kind];
+  return { ...texts, status: `${texts.text} ${dayLabel(hint.date)}`, to: hintLink(hint) };
 });
-
-function loadHints() {
-  if (!auth.isAdmin) {
-    hints.load(auth.user?.id);
-  }
-}
 
 // Звіт могли сформувати, а день у планах — відмітити в іншій вкладці.
 function onFocus() {
-  if (document.visibilityState === 'visible') loadHints();
+  if (document.visibilityState === 'visible') hints.load();
 }
 
 onMounted(() => {
   links.$reset();
   links.load();
-  loadHints();
+  hints.load();
   document.addEventListener('visibilitychange', onFocus);
 });
 
 // Звіт, що формувався, змінив статус — підказка про нього оновлюється одразу.
-watch(() => generation.report?.status, () => loadHints());
+watch(() => generation.report?.status, () => hints.load());
 
 onBeforeUnmount(() => document.removeEventListener('visibilitychange', onFocus));
 
@@ -229,7 +194,7 @@ async function handleLogout() {
         <component
           :is="activeHint ? 'router-link' : 'div'"
           v-if="!auth.isAdmin && hints.loaded"
-          :to="activeHint?.day.to"
+          :to="activeHint?.to"
           class="today-card"
           :class="`tone-${activeHint ? activeHint.tone : 'ok'}`"
         >
@@ -241,7 +206,7 @@ async function handleLogout() {
             </span>
             <span class="today-text">
               <span class="today-title">{{ activeHint ? activeHint.title : 'Усе заповнено' }}</span>
-              <span class="today-status">{{ activeHint ? `${activeHint.text} ${dayLabel(activeHint.day.iso)}` : 'Плани й звіти в порядку' }}</span>
+              <span class="today-status">{{ activeHint ? activeHint.status : 'Плани й звіти в порядку' }}</span>
             </span>
           </div>
 

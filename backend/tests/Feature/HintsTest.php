@@ -70,7 +70,7 @@ class HintsTest extends TestCase
         // Таски є, але Google не прийняв.
         Report::create(['employee_id' => $employee->id, 'report_date' => '2026-09-18', 'status' => Report::STATUS_COMPLETED, 'summary' => ['Попередження' => 'не вивантажено'], 'tasks' => $task]);
         // День без активності (відпустка) — не пропуск.
-        Report::create(['employee_id' => $employee->id, 'report_date' => '2026-09-17', 'status' => Report::STATUS_COMPLETED, 'summary' => ['Результат' => 'День без активності в Yaware — історія і Google Таблиця не оновлювались.'], 'tasks' => []]);
+        Report::create(['employee_id' => $employee->id, 'report_date' => '2026-09-17', 'status' => Report::STATUS_COMPLETED, 'summary' => ['Результат' => Report::EMPTY_DAY_RESULT], 'tasks' => []]);
 
         Sanctum::actingAs($employee->user);
 

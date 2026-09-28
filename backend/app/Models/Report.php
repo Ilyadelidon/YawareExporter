@@ -24,6 +24,12 @@ class Report extends Model
     // наступного дня їх не переганяє.
     public const STATUS_BLOCKED = 'blocked';
 
+    /**
+     * «Результат» звіту за день без активності в Yaware (відпустка,
+     * лікарняний): в історію і Google Таблицю такий день не пишеться.
+     */
+    public const EMPTY_DAY_RESULT = 'День без активності в Yaware — історія і Google Таблиця не оновлювались.';
+
     protected function casts(): array
     {
         return [
@@ -48,7 +54,7 @@ class Report extends Model
 
         $summary = $this->summary ?? [];
 
-        if (str_contains((string) ($summary['Результат'] ?? ''), 'без активності')) {
+        if (($summary['Результат'] ?? null) === self::EMPTY_DAY_RESULT) {
             return false;
         }
 
