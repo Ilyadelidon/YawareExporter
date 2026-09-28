@@ -97,8 +97,11 @@ const integrationsHint = computed(() => {
 
 // День, про який нагадує підказка в меню (немає звіту чи задач у Планах).
 // Якщо працівник цього дня не працював — прибирає нагадування тут, на самому дні.
+// Коли за день уже є час у розборі (або звіт заблоковано через час поза
+// тасками), день точно робочий — «Не працював» тоді не пропонуємо.
 const isHintedDay = computed(() => {
   if (auth.isAdmin || !selectedDate.value) return false;
+  if (isBlocked.value || parseClock(report.value?.summary?.[TIME_KEYS.total]) > 0) return false;
   const iso = toIso(selectedDate.value);
   return hints.reportDays.some((item) => item.date === iso) || hints.planDays.includes(iso);
 });
