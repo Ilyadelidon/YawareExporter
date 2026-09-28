@@ -9,7 +9,9 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 #[Fillable([
     'plan_project_id', 'plan_section_id', 'employee_id', 'title', 'note', 'status', 'position',
-    'bitrix_task_id', 'bitrix_snapshot', 'bitrix_pending', 'bitrix_unlinked_at', 'bitrix_subtasks',
+    'bitrix_task_id', 'bitrix_snapshot', 'bitrix_pending', 'bitrix_unlinked_at',
+    'trello_card_id', 'trello_board_id', 'trello_snapshot', 'trello_pending', 'trello_unlinked_at',
+    'subtasks',
 ])]
 class PlanTask extends Model
 {
@@ -49,9 +51,12 @@ class PlanTask extends Model
     {
         return [
             'bitrix_snapshot' => 'array',
-            'bitrix_subtasks' => 'array',
             'bitrix_pending' => 'boolean',
             'bitrix_unlinked_at' => 'datetime',
+            'trello_snapshot' => 'array',
+            'trello_pending' => 'boolean',
+            'trello_unlinked_at' => 'datetime',
+            'subtasks' => 'array',
         ];
     }
 

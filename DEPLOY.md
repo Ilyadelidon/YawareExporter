@@ -498,6 +498,12 @@ systemctl start yaware-queue-default yaware-queue-logins yaware-queue-analysis
   підключеного порталу команда мовчки завершується успіхом. Попередження
   (виконавця не знайдено, на задачі теги кількох проектів) — у `laravel.log`.
   Разова перевірка: `sudo -u www-data php artisan plans:sync-bitrix`.
+- `plans:sync-trello` — те саме для Trello: картки з міткою «План» і міткою
+  проекту на дошках усіх, хто підключив Trello, стають задачами плану
+  (виконавець — власник дошки, статус — за назвою списку). Нова задача з
+  сервісу йде в трекер, вибраний виконавцем для звітів, а якщо там її нема де
+  створити — в інший. Підзадачі беруться з Power-Up-а Duck Epics. Разова
+  перевірка: `sudo -u www-data php artisan plans:sync-trello`.
 - Розклад у `routes/console.php`: будні 07:00 Europe/Kyiv, вивід команди
   пишеться в `storage/logs/scheduler.log`.
 - Потрібен cron під `www-data` (той самий користувач, що й queue-воркери,

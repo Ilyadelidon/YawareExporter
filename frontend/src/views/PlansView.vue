@@ -17,6 +17,21 @@ import PlanTaskDialog from '../components/PlanTaskDialog.vue';
 const CLOSED_STATUSES = ['done', 'not_relevant'];
 const WEEKDAYS = ['Нд', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
 const LAST_PROJECT_KEY = 'plans.lastProject';
+// Трекер, з яким звʼязана задача плану, — підписи для посилання й стану.
+const TRACKERS = {
+  bitrix: {
+    label: 'Бітрікс24',
+    linkHint: 'Задача в Бітрікс24 з тегом «План»',
+    unlinked: 'поза Бітріксом',
+    unlinkedHint: 'У Бітріксі задачу видалили або зняли з неї тег «План» — у плані вона лишилась, але більше не синхронізується',
+  },
+  trello: {
+    label: 'Trello',
+    linkHint: 'Картка Trello з міткою «План»',
+    unlinked: 'поза Trello',
+    unlinkedHint: 'У Trello картку архівували, видалили або зняли з неї мітку «План» — у плані вона лишилась, але більше не синхронізується',
+  },
+};
 
 const auth = useAuthStore();
 const route = useRoute();
@@ -50,7 +65,7 @@ const dayPopover = ref(null);
 const dayEdit = ref(null);
 const daySaving = ref(false);
 const sheetPanel = ref(null);
-// Задачі, розгорнуті до підзадач Бітрікса.
+// Задачі, розгорнуті до підзадач із трекера.
 const expanded = ref(new Set());
 
 const projectId = computed(() => Number(route.query.project) || null);
@@ -724,7 +739,7 @@ onMounted(async () => {
                         type="button"
                         class="subtasks-toggle"
                         :class="{ 'is-open': expanded.has(task.id) }"
-                        :title="expanded.has(task.id) ? 'Згорнути підзадачі' : 'Підзадачі в Бітрікс24'"
+                        :title="expanded.has(task.id) ? 'Згорнути підзадачі' : `Підзадачі в ${TRACKERS[task.tracker]?.label ?? 'трекері'}`"
                         :aria-expanded="expanded.has(task.id)"
                         @click="toggleSubtasks(task)"
                       >
@@ -745,10 +760,10 @@ onMounted(async () => {
                           <a v-if="noteLink(task.note)" :href="noteLink(task.note)" target="_blank" rel="noopener" class="note-link">посилання</a>
                           {{ noteText(task.note) }}
                         </span>
-                        <span v-if="task.bitrix_state === 'unlinked'" class="task-note" title="У Бітріксі задачу видалили або зняли з неї тег «План» — у плані вона лишилась, але більше не синхронізується">
-                          поза Бітріксом
+                        <span v-if="task.tracker_state === 'unlinked'" class="task-note" :title="TRACKERS[task.tracker].unlinkedHint">
+                          {{ TRACKERS[task.tracker].unlinked }}
                         </span>
-                        <a v-else-if="task.bitrix_url" :href="task.bitrix_url" target="_blank" rel="noopener" class="task-note note-link" title="Задача в Бітрікс24 з тегом «План»">Бітрікс24</a>
+                        <a v-else-if="task.tracker_url" :href="task.tracker_url" target="_blank" rel="noopener" class="task-note note-link" :title="TRACKERS[task.tracker].linkHint">{{ TRACKERS[task.tracker].label }}</a>
                       </div>
                     </div>
                   </td>

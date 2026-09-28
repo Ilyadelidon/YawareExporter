@@ -219,8 +219,8 @@ class PlanBitrixSyncTest extends TestCase
         $this->assertSame('3', $this->portalTasks['500']['status']);
 
         $this->getJson("/api/plans/projects/{$project->id}")
-            ->assertJsonPath('tasks.0.bitrix_state', 'linked')
-            ->assertJsonPath('tasks.0.bitrix_url', self::PORTAL.'/company/personal/user/7/tasks/task/view/500/');
+            ->assertJsonPath('tasks.0.tracker_state', 'linked')
+            ->assertJsonPath('tasks.0.tracker_url', self::PORTAL.'/company/personal/user/7/tasks/task/view/500/');
 
         // Наступний прогін бачить ту саму задачу — нічого не дублює й не змінює.
         $this->sync();
@@ -260,7 +260,7 @@ class PlanBitrixSyncTest extends TestCase
         $this->sync();
 
         $task = PlanTask::first();
-        $this->assertSame([['id' => '201', 'title' => 'API Monobank v2', 'responsible' => '7']], $task->bitrix_subtasks);
+        $this->assertSame([['id' => '201', 'title' => 'API Monobank v2', 'url' => self::PORTAL.'/company/personal/user/7/tasks/task/view/201/']], $task->subtasks);
         $this->assertEquals($updatedAt, $task->updated_at);
         $this->assertSame([], $this->writes);
     }
@@ -384,7 +384,7 @@ class PlanBitrixSyncTest extends TestCase
         $this->assertNotNull($task->bitrix_unlinked_at);
 
         Sanctum::actingAs($ivan->user);
-        $this->getJson("/api/plans/projects/{$project->id}")->assertJsonPath('tasks.0.bitrix_state', 'unlinked');
+        $this->getJson("/api/plans/projects/{$project->id}")->assertJsonPath('tasks.0.tracker_state', 'unlinked');
 
         // Розвʼязану задачу правки в сервісі в Бітрікс не повертають.
         $this->patchJson("/api/plans/tasks/{$task->id}", ['title' => 'Змінено'])->assertOk();
@@ -431,7 +431,7 @@ class PlanBitrixSyncTest extends TestCase
         $this->assertTrue($task->fresh()->bitrix_pending);
         $this->assertSame('Поставив адмін', $this->portalTasks['101']['title']);
 
-        $this->getJson("/api/plans/projects/{$project->id}")->assertJsonPath('tasks.0.bitrix_state', 'pending');
+        $this->getJson("/api/plans/projects/{$project->id}")->assertJsonPath('tasks.0.tracker_state', 'pending');
 
         // Виконавцю назву чужої задачі міняти не можна — прогін пробує від імені адміністратора.
         $this->failures['tasks.task.update'] = 1;

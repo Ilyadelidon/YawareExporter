@@ -129,6 +129,91 @@ class TrelloService implements TaskProvider
             ->throw();
     }
 
+    public function boardId(): ?string
+    {
+        return $this->boardId;
+    }
+
+    /**
+     * Відкриті списки дошки в порядку на дошці. Без кешу, як і решта методів
+     * для синхронізації планів: їй потрібен свіжий стан.
+     *
+     * @return list<array{id: string, name: string}>
+     */
+    public function lists(): array
+    {
+        return $this->boardGet('lists', ['fields' => 'name', 'filter' => 'open']);
+    }
+
+    /** @return list<array{id: string, name: string}> */
+    public function labels(): array
+    {
+        return $this->boardGet('labels', ['fields' => 'name', 'limit' => 1000]);
+    }
+
+    /**
+     * Відкриті картки дошки разом із даними Power-Up-ів — у них Duck Epics
+     * тримає підзадачі.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function openCards(): array
+    {
+        return $this->boardGet('cards', [
+            'fields' => 'name,desc,idList,idLabels,shortUrl',
+            'pluginData' => 'true',
+            'filter' => 'open',
+        ]);
+    }
+
+    public function card(string $id): array
+    {
+        return $this->request()
+            ->get(self::API_BASE."/cards/{$id}", ['fields' => 'idLabels'])
+            ->throw()
+            ->json();
+    }
+
+    /** Створює мітку на дошці й повертає її id. */
+    public function createLabel(string $name, string $color): string
+    {
+        return (string) $this->request(['name' => $name, 'color' => $color, 'idBoard' => $this->boardId])
+            ->post(self::API_BASE.'/labels')
+            ->throw()
+            ->json('id');
+    }
+
+    /** Створює картку й повертає її (id, shortUrl). */
+    public function addCard(array $fields): array
+    {
+        return $this->request($fields)
+            ->post(self::API_BASE.'/cards')
+            ->throw()
+            ->json();
+    }
+
+    public function updateCard(string $id, array $fields): void
+    {
+        $this->request($fields)
+            ->put(self::API_BASE."/cards/{$id}")
+            ->throw();
+    }
+
+    public function removeCardLabel(string $cardId, string $labelId): void
+    {
+        $this->request()
+            ->delete(self::API_BASE."/cards/{$cardId}/idLabels/{$labelId}")
+            ->throw();
+    }
+
+    private function boardGet(string $resource, array $query): array
+    {
+        return $this->request()
+            ->get(self::API_BASE."/boards/{$this->boardId}/{$resource}", $query)
+            ->throw()
+            ->json();
+    }
+
     /**
      * Таски дошки, що потрапляють у вибраний день за інтервалом Start–Due (Log Work).
      *
@@ -216,10 +301,7 @@ class TrelloService implements TaskProvider
         return Cache::remember(
             "trello.board.{$this->boardId}.{$resource}",
             now()->addSeconds(60),
-            fn () => $this->request()
-                ->get(self::API_BASE."/boards/{$this->boardId}/{$resource}", $query)
-                ->throw()
-                ->json(),
+            fn () => $this->boardGet($resource, $query),
         );
     }
 

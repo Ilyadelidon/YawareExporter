@@ -12,7 +12,6 @@ use App\Models\PlanTask;
 use App\Models\User;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
 use RuntimeException;
 use Throwable;
 
@@ -33,7 +32,9 @@ use Throwable;
  */
 class PlanBitrixSync
 {
-    public const TAG = 'План';
+    use SyncsPlanTasks;
+
+    private const LOG_PREFIX = 'Плани ↔ Бітрікс24';
 
     private const FIELDS = ['title', 'description', 'status', 'responsible'];
 
@@ -63,9 +64,6 @@ class PlanBitrixSync
         6 => PlanTask::STATUS_PAUSED,
         7 => PlanTask::STATUS_NOT_RELEVANT,
     ];
-
-    /** @var array{created: int, updated: int, pushed: int, unlinked: int, warnings: list<string>} */
-    private array $summary = ['created' => 0, 'updated' => 0, 'pushed' => 0, 'unlinked' => 0, 'warnings' => []];
 
     /** Є куди синхронізувати: портал підключено і хоч один працівник авторизований. */
     public static function isAvailable(): bool
@@ -104,14 +102,6 @@ class PlanBitrixSync
     }
 
     /**
-     * @return array{created: int, updated: int, pushed: int, unlinked: int, warnings: list<string>}
-     */
-    public function summary(): array
-    {
-        return $this->summary;
-    }
-
-    /**
      * Прогін: підтягнути з Бітрікса нові й змінені задачі з тегом, розвʼязати
      * зниклі, дотиснути зміни сервісу, які не вдалося надіслати раніше.
      */
@@ -139,7 +129,7 @@ class PlanBitrixSync
             $bitrix = BitrixService::forAccount($account);
 
             try {
-                foreach ($bitrix->tasksWithTag(self::TAG) as $task) {
+                foreach ($bitrix->tasksWithTag(PlanTrackers::TAG) as $task) {
                     $remote[(string) ($task['id'] ?? '')] ??= ['task' => $task, 'via' => $bitrix];
                 }
 
@@ -243,25 +233,21 @@ class PlanBitrixSync
             }
         }
 
+        $portalUrl = BitrixWorkspace::active()?->portal_url;
         $byParent = $found->except([''])
             ->sortBy(fn (array $subtask) => (int) $subtask['id'])
             ->groupBy(fn (array $subtask) => (string) ($subtask['parentId'] ?? ''));
 
-        // Підзадачі — не правка задачі плану: updated_at не чіпаємо.
-        PlanTask::withoutTimestamps(fn () => $tasks->each(function (PlanTask $task) use ($byParent) {
-            $subtasks = ($byParent[$task->bitrix_task_id] ?? collect())
+        foreach ($tasks as $task) {
+            $this->storeSubtasks($task, ($byParent[$task->bitrix_task_id] ?? collect())
                 ->map(fn (array $subtask) => [
                     'id' => (string) $subtask['id'],
                     'title' => mb_substr((string) ($subtask['title'] ?? ''), 0, 1000),
-                    'responsible' => (string) ($subtask['responsibleId'] ?? ''),
+                    'url' => $portalUrl ? BitrixService::taskLink($portalUrl, (string) $subtask['id'], (string) ($subtask['responsibleId'] ?? '')) : null,
                 ])
                 ->values()
-                ->all();
-
-            if ($subtasks !== ($task->bitrix_subtasks ?? [])) {
-                $task->forceFill(['bitrix_subtasks' => $subtasks])->save();
-            }
-        }));
+                ->all());
+        }
     }
 
     /**
@@ -287,13 +273,7 @@ class PlanBitrixSync
                 }
 
                 $snapshot = $task->bitrix_snapshot ?? [];
-                $changes = [];
-
-                foreach (self::FIELDS as $field) {
-                    if ($local[$field] !== null && $local[$field] !== ($snapshot[$field] ?? null)) {
-                        $changes[$field] = $local[$field];
-                    }
-                }
+                $changes = $this->changes($local, $snapshot, self::FIELDS);
 
                 if ($changes !== []) {
                     $bitrix->updateTask($task->bitrix_task_id, $this->bitrixFields($changes));
@@ -327,7 +307,7 @@ class PlanBitrixSync
                 throw new RuntimeException('Бітрікс24 не віддав теги задачі.');
             }
 
-            $rest = array_values(array_filter($tags, fn (string $tag) => $this->key($tag) !== $this->key(self::TAG)));
+            $rest = array_values(array_filter($tags, fn (string $tag) => $this->key($tag) !== $this->key(PlanTrackers::TAG)));
 
             if (count($rest) !== count($tags)) {
                 // Порожній масив Бітрікс сприймає як «не змінювати», а порожній
@@ -349,7 +329,7 @@ class PlanBitrixSync
             'TITLE' => $local['title'],
             'DESCRIPTION' => $local['description'],
             'RESPONSIBLE_ID' => $local['responsible'],
-            'TAGS' => [self::TAG, $task->project->name],
+            'TAGS' => [PlanTrackers::TAG, $task->project->name],
         ];
 
         $id = $bitrix->addTask($fields);
@@ -384,10 +364,9 @@ class PlanBitrixSync
 
             $project->tasks()->create([
                 'employee_id' => $employee->id,
-                'title' => mb_substr($remote['title'], 0, 1000),
-                'note' => $remote['description'] === '' ? null : $remote['description'],
+                ...$this->textAttributes($remote),
                 'status' => self::FROM_BITRIX[$remote['status']] ?? PlanTask::STATUS_PENDING,
-                'position' => (int) PlanTask::where('plan_project_id', $project->id)->max('position') + 1,
+                'position' => $this->nextPosition($project),
                 'bitrix_task_id' => $id,
                 'bitrix_snapshot' => $remote,
             ]);
@@ -405,20 +384,7 @@ class PlanBitrixSync
     {
         $snapshot = $task->bitrix_snapshot ?? $remote;
         $local = $this->localFields($task, $bitrix);
-        $apply = [];
-        $push = [];
-
-        foreach (self::FIELDS as $field) {
-            $mine = $local[$field];
-            $theirs = $remote[$field];
-            $base = $snapshot[$field] ?? null;
-
-            if ($mine !== null && $mine !== $base && $mine !== $theirs) {
-                $push[$field] = $mine;
-            } elseif ($theirs !== $base && $theirs !== $mine) {
-                $apply[$field] = $theirs;
-            }
-        }
+        [$apply, $push] = $this->merge($local, $remote, $snapshot, self::FIELDS);
 
         // Тег проекту змінили в Бітріксі — задача переїжджає в інший план.
         $moveTo = $project && $remote['project'] !== ($snapshot['project'] ?? null) && $project->id !== $task->plan_project_id
@@ -449,15 +415,7 @@ class PlanBitrixSync
 
         DB::transaction(function () use ($task, $apply, $moveTo, $newSnapshot, $pushFailed, $bitrix) {
             $previousEmployeeId = $task->employee_id;
-            $attributes = [];
-
-            if (array_key_exists('title', $apply)) {
-                $attributes['title'] = mb_substr($apply['title'], 0, 1000);
-            }
-
-            if (array_key_exists('description', $apply)) {
-                $attributes['note'] = $apply['description'] === '' ? null : $apply['description'];
-            }
+            $attributes = $this->textAttributes($apply);
 
             if (array_key_exists('status', $apply)) {
                 $attributes['status'] = self::FROM_BITRIX[$apply['status']] ?? $task->status;
@@ -484,15 +442,7 @@ class PlanBitrixSync
                 'bitrix_pending' => $pushFailed,
             ])->save();
 
-            // Виконавцю задачі потрібен доступ до плану її проекту.
-            $task->unsetRelation('project');
-            $task->project->members()->syncWithoutDetaching([$task->employee_id]);
-
-            if (in_array($task->status, PlanTask::INACTIVE_STATUSES, true) || $task->employee_id !== $previousEmployeeId) {
-                Employee::whereKey($previousEmployeeId)
-                    ->where('current_plan_task_id', $task->id)
-                    ->update(['current_plan_task_id' => null]);
-            }
+            $this->afterPull($task, $previousEmployeeId);
         });
 
         if ($changed) {
@@ -648,21 +598,5 @@ class PlanBitrixSync
             ->filter(fn ($tag) => is_string($tag) && $tag !== '')
             ->values()
             ->all();
-    }
-
-    private function text(string $value): string
-    {
-        return trim(str_replace("\r\n", "\n", $value));
-    }
-
-    private function key(string $name): string
-    {
-        return mb_strtolower(trim($name));
-    }
-
-    private function warn(string $message): void
-    {
-        $this->summary['warnings'][] = $message;
-        Log::warning('Плани ↔ Бітрікс24: '.$message);
     }
 }

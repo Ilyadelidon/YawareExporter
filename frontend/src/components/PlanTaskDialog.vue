@@ -166,7 +166,7 @@ const daysMarked = computed(() => Object.keys(props.task?.days || {}).length);
               class="td-input"
               rows="2"
               maxlength="5000"
-              placeholder="Посилання на Бітрікс, документ або коротке уточнення"
+              placeholder="Посилання на задачу, документ або коротке уточнення"
             ></textarea>
           </label>
 

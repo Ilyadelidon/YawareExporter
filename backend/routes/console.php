@@ -47,6 +47,12 @@ Schedule::command('plans:sync-bitrix')
     ->withoutOverlapping(15)
     ->runInBackground();
 
+// Те саме для карток Trello з міткою «План».
+Schedule::command('plans:sync-trello')
+    ->everyFiveMinutes()
+    ->withoutOverlapping(15)
+    ->runInBackground();
+
 // Протерміновані токени нікого не пускають, але лишаються в базі назавжди.
 // Добу після протермінування тримаємо навмисно: якщо доступ зникне раптово,
 // по рядку видно, що токен саме протермінувався, а не був відкликаний.

@@ -8,8 +8,10 @@ use App\Models\Employee;
 use App\Models\PlanProject;
 use App\Models\PlanTask;
 use App\Models\PlanTaskDay;
+use App\Models\User;
 use App\Services\BitrixService;
-use App\Services\PlanBitrixSync;
+use App\Services\PlanTrackers;
+use App\Services\PlanTrelloSync;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -54,7 +56,7 @@ class PlanTaskController extends Controller
             'position' => (int) PlanTask::where('plan_project_id', $project->id)->max('position') + 1,
         ]);
 
-        PlanBitrixSync::queuePush($task, $user);
+        PlanTrackers::push($task, $user);
 
         return response()->json(['data' => $this->payload($task)], 201);
     }
@@ -87,12 +89,14 @@ class PlanTaskController extends Controller
         }
 
         $synced = false;
+        $executorChanged = false;
 
-        DB::transaction(function () use ($task, $validated, &$synced) {
+        DB::transaction(function () use ($task, $validated, &$synced, &$executorChanged) {
             $previousEmployeeId = $task->employee_id;
             $task->update($validated);
-            // Розділ живе лише в сервісі — у Бітрікс ідуть тільки спільні поля.
+            // Розділ живе лише в сервісі — у трекер ідуть тільки спільні поля.
             $synced = $task->wasChanged(['title', 'note', 'status', 'employee_id']);
+            $executorChanged = $task->wasChanged('employee_id');
 
             // Закрита чи передана задача вже не «поточна» для попереднього виконавця.
             if (in_array($task->status, PlanTask::INACTIVE_STATUSES, true) || $task->employee_id !== $previousEmployeeId) {
@@ -102,8 +106,10 @@ class PlanTaskController extends Controller
             }
         });
 
-        if ($synced) {
-            PlanBitrixSync::queuePush($task, $user);
+        if ($executorChanged) {
+            PlanTrackers::executorChanged($task->unsetRelation('employee'), $user);
+        } elseif ($synced) {
+            PlanTrackers::push($task, $user);
         }
 
         return response()->json(['data' => $this->payload($task->fresh())]);
@@ -113,7 +119,7 @@ class PlanTaskController extends Controller
     {
         $this->authorizeEdit($request, $task);
 
-        PlanBitrixSync::queueTagRemoval($task, $request->user());
+        PlanTrackers::remove($task, $request->user());
         $task->delete();
 
         return response()->json(['ok' => true]);
@@ -172,7 +178,7 @@ class PlanTaskController extends Controller
         });
 
         if ($statusChanged) {
-            PlanBitrixSync::queuePush($task, $request->user());
+            PlanTrackers::push($task, $request->user());
         }
 
         return response()->json(['data' => $this->payload($task->fresh())]);
@@ -228,37 +234,47 @@ class PlanTaskController extends Controller
             'note' => $task->note,
             'status' => $task->status,
             'position' => $task->position,
-            ...self::bitrixPayload($task, BitrixWorkspace::active()?->portal_url),
+            ...self::trackerPayload($task, BitrixWorkspace::active()?->portal_url),
         ];
     }
 
     /**
-     * Звʼязок задачі з Бітріксом для інтерфейсу: посилання і стан —
-     * linked / pending (ще не дійшло) / unlinked (у Бітріксі зникла) / null.
+     * Звʼязок задачі з трекером для інтерфейсу: який (bitrix / trello),
+     * посилання і стан — linked / pending (ще не дійшло) / unlinked (у
+     * трекері зникла) / null. Підзадачі — з трекера, лише для перегляду.
      *
-     * Підзадачі — з Бітрікса, лише для перегляду.
-     *
-     * @return array{bitrix_url: ?string, bitrix_state: ?string, subtasks: list<array{id: string, title: string, url: ?string}>}
+     * @return array{tracker: ?string, tracker_url: ?string, tracker_state: ?string, subtasks: list<array{id: string, title: string, url: ?string}>}
      */
-    public static function bitrixPayload(PlanTask $task, ?string $portalUrl): array
+    public static function trackerPayload(PlanTask $task, ?string $portalUrl): array
     {
-        $state = match (true) {
-            $task->bitrix_unlinked_at !== null => 'unlinked',
-            $task->bitrix_pending => 'pending',
-            $task->bitrix_task_id !== null => 'linked',
-            default => null,
+        [$tracker, $url, $pending, $unlinkedAt] = match (true) {
+            $task->bitrix_task_id !== null || $task->bitrix_pending => [
+                User::TASK_PROVIDER_BITRIX,
+                $task->bitrix_task_id && $portalUrl
+                    ? BitrixService::taskLink($portalUrl, $task->bitrix_task_id, $task->bitrix_snapshot['responsible'] ?? null)
+                    : null,
+                $task->bitrix_pending,
+                $task->bitrix_unlinked_at,
+            ],
+            $task->trello_card_id !== null || $task->trello_pending => [
+                User::TASK_PROVIDER_TRELLO,
+                $task->trello_card_id ? PlanTrelloSync::cardUrl($task->trello_card_id) : null,
+                $task->trello_pending,
+                $task->trello_unlinked_at,
+            ],
+            default => [null, null, false, null],
         };
 
         return [
-            'bitrix_url' => $task->bitrix_task_id && $portalUrl
-                ? BitrixService::taskLink($portalUrl, $task->bitrix_task_id, $task->bitrix_snapshot['responsible'] ?? null)
-                : null,
-            'bitrix_state' => $state,
-            'subtasks' => array_map(fn (array $subtask) => [
-                'id' => $subtask['id'],
-                'title' => $subtask['title'],
-                'url' => $portalUrl ? BitrixService::taskLink($portalUrl, $subtask['id'], $subtask['responsible'] ?: null) : null,
-            ], $task->bitrix_subtasks ?? []),
+            'tracker' => $tracker,
+            'tracker_url' => $url,
+            'tracker_state' => match (true) {
+                $unlinkedAt !== null => 'unlinked',
+                $pending => 'pending',
+                ($task->bitrix_task_id ?? $task->trello_card_id) !== null => 'linked',
+                default => null,
+            },
+            'subtasks' => $task->subtasks ?? [],
         ];
     }
 }

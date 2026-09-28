@@ -68,7 +68,7 @@ class PlanProjectController extends Controller
         $portalUrl = BitrixWorkspace::active()?->portal_url;
 
         $tasks = $project->tasks()->get()->map(fn (PlanTask $task) => [
-            ...PlanTaskController::bitrixPayload($task, $portalUrl),
+            ...PlanTaskController::trackerPayload($task, $portalUrl),
             'id' => $task->id,
             'section_id' => $task->plan_section_id,
             'employee_id' => $task->employee_id,
