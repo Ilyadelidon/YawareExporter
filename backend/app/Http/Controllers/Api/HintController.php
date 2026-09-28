@@ -23,6 +23,9 @@ class HintController extends Controller
     /** Скільки календарних днів назад дивимось (разом із сьогодні). */
     private const LOOKBACK_DAYS = 7;
 
+    /** З якої години (за Києвом) нагадуємо відмітити задачі за сьогодні: вночі день ще не почався. */
+    private const PLANS_TODAY_FROM_HOUR = 7;
+
     public function index(Request $request): JsonResponse
     {
         $user = $request->user();
@@ -33,7 +36,8 @@ class HintController extends Controller
             return response()->json(['today' => null, 'reports' => [], 'plans' => []]);
         }
 
-        $today = CarbonImmutable::now('Europe/Kyiv')->startOfDay();
+        $now = CarbonImmutable::now('Europe/Kyiv');
+        $today = $now->startOfDay();
 
         // Новенькому не нагадуємо про дні до того, як він уперше увійшов у сервіс.
         $joined = CarbonImmutable::parse($user->created_at)->setTimezone('Europe/Kyiv')->startOfDay();
@@ -49,7 +53,11 @@ class HintController extends Controller
         return response()->json([
             'today' => $today->toDateString(),
             'reports' => $this->missingReports($employee->id, array_values(array_diff($weekdays, [$today->toDateString()]))),
-            'plans' => $this->daysWithoutPlanTasks($user, $employee->id, $weekdays),
+            'plans' => $this->daysWithoutPlanTasks(
+                $user,
+                $employee->id,
+                $now->hour < self::PLANS_TODAY_FROM_HOUR ? array_values(array_diff($weekdays, [$today->toDateString()])) : $weekdays,
+            ),
         ]);
     }
 

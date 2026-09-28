@@ -98,6 +98,21 @@ class HintsTest extends TestCase
             ->assertJsonPath('plans', ['2026-09-23', '2026-09-21', '2026-09-17']);
     }
 
+    public function test_plan_hint_for_today_waits_until_seven_in_kyiv(): void
+    {
+        $employee = $this->employee();
+        PlanProject::create(['name' => 'TumTum'])->members()->sync([$employee->id]);
+        Sanctum::actingAs($employee->user);
+
+        // 06:59 за Києвом (UTC+3) — сьогодні ще не нагадуємо.
+        Carbon::setTestNow('2026-09-23 03:59:00');
+        $this->getJson('/api/hints')->assertOk()->assertJsonPath('plans.0', '2026-09-22');
+
+        // 07:00 — уже нагадуємо.
+        Carbon::setTestNow('2026-09-23 04:00:00');
+        $this->getJson('/api/hints')->assertOk()->assertJsonPath('plans.0', '2026-09-23');
+    }
+
     public function test_no_plan_hints_without_active_project(): void
     {
         $employee = $this->employee();
