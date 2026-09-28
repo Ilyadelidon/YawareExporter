@@ -26,6 +26,9 @@ class HintController extends Controller
     /** З якої години (за Києвом) нагадуємо відмітити задачі за сьогодні: вночі день ще не почався. */
     private const PLANS_TODAY_FROM_HOUR = 7;
 
+    /** Година ранкової автогенерації (routes/console.php): звіт за будній день зʼявляється о 07:00 наступного буднього. */
+    private const REPORTS_AUTOGEN_HOUR = 7;
+
     public function index(Request $request): JsonResponse
     {
         $user = $request->user();
@@ -52,7 +55,7 @@ class HintController extends Controller
 
         return response()->json([
             'today' => $today->toDateString(),
-            'reports' => $this->missingReports($employee->id, array_values(array_diff($weekdays, [$today->toDateString()]))),
+            'reports' => $this->missingReports($employee->id, array_values(array_diff($weekdays, [$today->toDateString()])), $now),
             'plans' => $this->daysWithoutPlanTasks(
                 $user,
                 $employee->id,
@@ -67,10 +70,14 @@ class HintController extends Controller
      * без тасок чи без вивантаження в Google (incomplete). Той, що
      * формується, пропуском не є.
      *
+     * Поки ранкова автогенерація за день ще не відбулась (о 07:00 наступного
+     * буднього; за пʼятницю — у понеділок), відсутній чи впалий звіт не
+     * підказуємо: його сформують самі.
+     *
      * @param  list<string>  $days
      * @return list<array{date: string, status: string}>
      */
-    private function missingReports(int $employeeId, array $days): array
+    private function missingReports(int $employeeId, array $days, CarbonImmutable $now): array
     {
         if ($days === []) {
             return [];
@@ -87,6 +94,11 @@ class HintController extends Controller
 
         foreach (array_reverse($days) as $day) {
             $status = $statuses[$day] ?? 'none';
+
+            $autogenAt = CarbonImmutable::parse($day, 'Europe/Kyiv')->nextWeekday()->setTime(self::REPORTS_AUTOGEN_HOUR, 0);
+            if (in_array($status, ['none', Report::STATUS_FAILED], true) && $now->lt($autogenAt)) {
+                continue;
+            }
 
             if (in_array($status, ['none', 'incomplete', Report::STATUS_FAILED, Report::STATUS_BLOCKED], true)) {
                 $missing[] = ['date' => $day, 'status' => $status];

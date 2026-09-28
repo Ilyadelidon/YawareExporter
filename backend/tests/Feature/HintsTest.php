@@ -113,6 +113,23 @@ class HintsTest extends TestCase
         $this->getJson('/api/hints')->assertOk()->assertJsonPath('plans.0', '2026-09-23');
     }
 
+    public function test_missing_report_waits_for_morning_autogeneration(): void
+    {
+        $employee = $this->employee();
+        Sanctum::actingAs($employee->user);
+
+        // Вівторок 22.09 06:59 за Києвом: звіт за понеділок 21.09 ще сформують.
+        Carbon::setTestNow('2026-09-22 03:59:00');
+        $this->getJson('/api/hints')->assertOk()->assertJsonPath('reports.0.date', '2026-09-18');
+
+        Carbon::setTestNow('2026-09-22 04:00:00');
+        $this->getJson('/api/hints')->assertOk()->assertJsonPath('reports.0.date', '2026-09-21');
+
+        // Неділя 20.09: пʼятницю 18.09 сформують лише в понеділок о 07:00.
+        Carbon::setTestNow('2026-09-20 12:00:00');
+        $this->getJson('/api/hints')->assertOk()->assertJsonPath('reports.0.date', '2026-09-17');
+    }
+
     public function test_no_plan_hints_without_active_project(): void
     {
         $employee = $this->employee();
