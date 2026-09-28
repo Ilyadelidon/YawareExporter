@@ -1,14 +1,15 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
-import client from '../api/client';
 import { useAuthStore } from '../stores/auth';
 import { useIntegrationLinksStore } from '../stores/integrations';
+import { useHintsStore } from '../stores/hints';
 import { useReportGenerationStore } from '../stores/reportGeneration';
 
 const auth = useAuthStore();
 const links = useIntegrationLinksStore();
 const generation = useReportGenerationStore();
+const hints = useHintsStore();
 const router = useRouter();
 const route = useRoute();
 
@@ -24,7 +25,7 @@ const mobileOpen = ref(false);
 
 watch(() => route.fullPath, () => {
   mobileOpen.value = false;
-  loadToday();
+  loadHints();
 });
 
 // Кнопки переходу показуємо лише для підключеного: порожній блок у меню
@@ -33,62 +34,92 @@ const hasShortcuts = computed(() => Boolean(links.google || links.tracker));
 
 const trackerIcon = computed(() => (links.tracker?.provider === 'bitrix' ? 'bitrix' : 'trello'));
 
-// ---- Картка «Звіт за сьогодні» (лише працівнику: в адміна звітів багато) ----
+// ---- Підказки працівнику: що ще не зроблено (адміну не показуємо) ----
 
-const now = new Date();
-const pad = (n) => String(n).padStart(2, '0');
-const todayIso = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-const todayShort = `${pad(now.getDate())}.${pad(now.getMonth() + 1)}`;
+const MONTH_DAY = (iso) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}`;
 
-const todayReport = ref(null);
-const todayLoaded = ref(false);
-let todayTimer = null;
+// «за сьогодні» / «за вчора» / «за 24.09». Вчора — саме календарне: у
+// понеділок пʼятниця вже не «вчора».
+function dayLabel(iso) {
+  if (iso === hints.today) return 'за сьогодні';
+  const yesterday = new Date(`${hints.today}T00:00:00`);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const pad = (n) => String(n).padStart(2, '0');
+  if (iso === `${yesterday.getFullYear()}-${pad(yesterday.getMonth() + 1)}-${pad(yesterday.getDate())}`) return 'за вчора';
+  return `за ${MONTH_DAY(iso)}`;
+}
 
-const TODAY_STATES = {
-  none: { text: 'Ще не сформовано', tone: 'warn' },
-  pending: { text: 'Формується…', tone: 'info' },
-  processing: { text: 'Формується…', tone: 'info' },
-  completed: { text: 'Сформовано', tone: 'ok' },
-  failed: { text: 'Не вдалося сформувати', tone: 'error' },
-  blocked: { text: 'Потрібна ваша дія', tone: 'warn' },
-};
+function reportLink(iso) {
+  return { name: 'reports', query: { date: iso } };
+}
 
-const todayState = computed(() => TODAY_STATES[todayReport.value?.status || 'none'] || TODAY_STATES.none);
+function planLink(iso) {
+  return { name: 'plans', query: { ...(route.name === 'plans' ? route.query : {}), month: iso.slice(0, 7) } };
+}
 
-async function loadToday() {
-  if (auth.isAdmin) {
-    return;
+// Показуємо одну підказку й один день за раз. Дні приходять від найсвіжішого
+// до давнішого: закрили вчора — зʼявляється позавчора. Пріоритет підказок: спершу відмітити задачі в
+// Планах, потім сформувати пропущені звіти, і лише тоді — звіти, що чекають
+// правки тасок у трекері (заблокований звіт не «сформувати» одразу).
+const activeHint = computed(() => {
+  if (hints.planDays.length) {
+    return {
+      title: 'Не вказано задачі в Планах',
+      text: 'Відмітьте, над чим працювали',
+      tone: 'warn',
+      day: { iso: hints.planDays[0], to: planLink(hints.planDays[0]) },
+    };
   }
-  try {
-    const { data } = await client.get('/reports', { params: { date_from: todayIso, date_to: todayIso } });
-    todayReport.value = data.data?.[0] || null;
-  } catch {
-    // Картка допоміжна: при збої лишаємо попередній стан.
-  } finally {
-    todayLoaded.value = true;
+
+  const missing = hints.reportDays.filter((item) => item.status !== 'blocked');
+  if (missing.length) {
+    return {
+      title: 'Не сформовано звіт',
+      text: 'Сформуйте звіт',
+      tone: 'warn',
+      day: { iso: missing[0].date, to: reportLink(missing[0].date) },
+    };
   }
+
+  const blocked = hints.reportDays.filter((item) => item.status === 'blocked');
+  if (blocked.length) {
+    return {
+      title: 'Звіт чекає вашої дії',
+      text: 'Поправте таски в трекері',
+      tone: 'error',
+      day: { iso: blocked[0].date, to: reportLink(blocked[0].date) },
+    };
+  }
+
+  return null;
+});
+
+function loadHints() {
+  if (!auth.isAdmin) {
+    hints.load(auth.user?.id);
+  }
+}
+
+// Звіт могли сформувати, а день у планах — відмітити в іншій вкладці.
+function onFocus() {
+  if (document.visibilityState === 'visible') loadHints();
 }
 
 onMounted(() => {
   links.$reset();
   links.load();
-  loadToday();
-  // Звіт формують на сторінці звітів без переходу — підтягуємо статус,
-  // поки він не став остаточним.
-  todayTimer = setInterval(() => {
-    if (todayReport.value?.status !== 'completed') {
-      loadToday();
-    }
-  }, 30000);
+  loadHints();
+  document.addEventListener('visibilitychange', onFocus);
 });
 
-// Звіт, що формувався, змінив статус — картка «за сьогодні» не чекає 30 с.
-watch(() => generation.report?.status, () => loadToday());
+// Звіт, що формувався, змінив статус — підказка про нього оновлюється одразу.
+watch(() => generation.report?.status, () => loadHints());
 
-onBeforeUnmount(() => clearInterval(todayTimer));
+onBeforeUnmount(() => document.removeEventListener('visibilitychange', onFocus));
 
 async function handleLogout() {
   generation.stop();
+  hints.$reset();
   await auth.logout();
   router.push({ name: 'login' });
 }
@@ -195,21 +226,26 @@ async function handleLogout() {
           </a>
         </div>
 
-        <router-link
-          v-if="!auth.isAdmin && todayLoaded"
-          :to="{ name: 'reports' }"
+        <component
+          :is="activeHint ? 'router-link' : 'div'"
+          v-if="!auth.isAdmin && hints.loaded"
+          :to="activeHint?.day.to"
           class="today-card"
-          :class="`tone-${todayState.tone}`"
+          :class="`tone-${activeHint ? activeHint.tone : 'ok'}`"
         >
-          <span class="today-icon">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="square"><path d="M4 6h16v14H4z"></path><path d="M4 10h16"></path><path d="M8 3v4"></path><path d="M16 3v4"></path></svg>
-            <span class="today-badge"></span>
-          </span>
-          <span class="today-text">
-            <span class="today-title">Звіт за {{ todayShort }}</span>
-            <span class="today-status">{{ todayState.text }}</span>
-          </span>
-        </router-link>
+          <div class="today-main">
+            <span class="today-icon">
+              <svg v-if="activeHint" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="square"><path d="M4 6h16v14H4z"></path><path d="M4 10h16"></path><path d="M8 3v4"></path><path d="M16 3v4"></path></svg>
+              <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="square"><path d="M5 12l5 5 9-10"></path></svg>
+              <span class="today-badge"></span>
+            </span>
+            <span class="today-text">
+              <span class="today-title">{{ activeHint ? activeHint.title : 'Усе заповнено' }}</span>
+              <span class="today-status">{{ activeHint ? `${activeHint.text} ${dayLabel(activeHint.day.iso)}` : 'Плани й звіти в порядку' }}</span>
+            </span>
+          </div>
+
+        </component>
 
         <div class="user-row">
           <span class="avatar">{{ initials }}</span>
@@ -386,8 +422,7 @@ async function handleLogout() {
 }
 
 .nav-item:focus-visible,
-.logout-btn:focus-visible,
-.today-card:focus-visible {
+.logout-btn:focus-visible {
   outline: 2px solid #2DD4BF;
   outline-offset: -2px;
 }
@@ -466,12 +501,12 @@ async function handleLogout() {
   color: var(--sb-fg3);
 }
 
-/* Картка стану сьогоднішнього звіту */
+/* Підказка працівнику: одна за раз, найважливіша */
 .today-card {
   margin: 0 12px 12px;
   display: flex;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  gap: 10px;
   padding: 12px;
   background: #FFFFFF;
   border: 1px solid var(--sb-border);
@@ -485,14 +520,24 @@ async function handleLogout() {
   --tone-bg: var(--sb-info-bg);
 }
 
-.today-card.tone-info {
-  --tone: var(--sb-info);
-  --tone-bg: var(--sb-info-bg);
-}
-
 .today-card.tone-error {
   --tone: var(--sb-error);
   --tone-bg: var(--sb-error-bg);
+}
+
+.today-card:is(a):hover {
+  border-color: var(--tone);
+}
+
+.today-card:focus-visible {
+  outline: 2px solid #2DD4BF;
+  outline-offset: -2px;
+}
+
+.today-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .today-icon {
@@ -538,6 +583,7 @@ async function handleLogout() {
 
 .today-status {
   font-size: 12px;
+  line-height: 1.35;
   color: var(--tone);
 }
 

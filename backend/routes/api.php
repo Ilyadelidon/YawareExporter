@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\BitrixAccountController;
 use App\Http\Controllers\Api\EmployeeController;
 use App\Http\Controllers\Api\EmployeeMemoryController;
 use App\Http\Controllers\Api\GoogleSpreadsheetController;
+use App\Http\Controllers\Api\HintController;
 use App\Http\Controllers\Api\IntegrationLinkController;
 use App\Http\Controllers\Api\OpsTelegramController;
 use App\Http\Controllers\Api\PlanGoogleController;
@@ -75,6 +76,9 @@ Route::middleware(['auth:sanctum', 'not-dismissed'])->group(function () {
 
     // Готові посилання на підключені сервіси — кнопки переходу в боковому меню.
     Route::get('/integrations/links', [IntegrationLinkController::class, 'index']);
+
+    // Підказки працівнику в боковому меню: пропущені звіти й дні без задач у планах.
+    Route::get('/hints', [HintController::class, 'index']);
 
     Route::get('/stats', [StatsController::class, 'index']);
     Route::get('/stats/activities', [StatsController::class, 'activities']);

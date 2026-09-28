@@ -9,6 +9,7 @@ import Message from 'primevue/message';
 import Popover from 'primevue/popover';
 import client from '../api/client';
 import { useAuthStore } from '../stores/auth';
+import { useHintsStore } from '../stores/hints';
 import PlanGoogleDialog from '../components/PlanGoogleDialog.vue';
 import PlanProjectDialog from '../components/PlanProjectDialog.vue';
 import PlanSectionDialog from '../components/PlanSectionDialog.vue';
@@ -34,6 +35,8 @@ const TRACKERS = {
 };
 
 const auth = useAuthStore();
+// Відмітка дня прибирає підказку «не вказано задачі» в меню без перезаходу.
+const hints = useHintsStore();
 const route = useRoute();
 const router = useRouter();
 
@@ -42,7 +45,13 @@ const plan = ref(null);
 const loadingProjects = ref(true);
 const loadingPlan = ref(false);
 const errorMessage = ref('');
-const selectedMonth = ref(new Date());
+// Підказка в меню може вести на день минулого місяця: ?month=Y-m.
+function queryMonth() {
+  const value = route.query.month;
+  return typeof value === 'string' && /^\d{4}-\d{2}$/.test(value) ? new Date(`${value}-01T00:00:00`) : null;
+}
+
+const selectedMonth = ref(queryMonth() || new Date());
 
 const personFilter = ref('all');
 const hideClosed = ref(true);
@@ -316,6 +325,7 @@ async function toggleCurrent(task) {
       await client.put(`/plans/tasks/${task.id}/current`);
     }
     await loadPlan();
+    hints.load();
   } catch (error) {
     errorMessage.value = error.response?.data?.message || 'Не вдалося змінити поточну задачу.';
   }
@@ -351,6 +361,7 @@ async function onDayClick(event, task, day) {
     try {
       await client.put(`/plans/tasks/${task.id}/days/${day.iso}`);
       dayEdit.value.marked = true;
+      hints.load();
     } catch (error) {
       const { [day.iso]: _, ...rest } = task.days;
       task.days = rest;
@@ -387,6 +398,7 @@ async function unmarkDay() {
     await client.delete(`/plans/tasks/${edit.task.id}/days/${edit.iso}`);
     const { [edit.iso]: _, ...rest } = edit.task.days;
     edit.task.days = rest;
+    hints.load();
     dayPopover.value.hide();
   } catch (error) {
     errorMessage.value = error.response?.data?.message || 'Не вдалося зняти відмітку.';
@@ -498,6 +510,10 @@ async function exportToGoogle() {
 }
 
 watch(projectId, () => loadPlan({ scroll: true }));
+watch(() => route.query.month, () => {
+  const month = queryMonth();
+  if (month && monthParam(month) !== monthParam(selectedMonth.value)) selectedMonth.value = month;
+});
 watch(selectedMonth, (value) => {
   if (value) loadPlan({ scroll: true });
 });

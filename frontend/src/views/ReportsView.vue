@@ -3,14 +3,19 @@ import { computed, onMounted, ref, watch } from 'vue';
 import DatePicker from 'primevue/datepicker';
 import Message from 'primevue/message';
 import Select from 'primevue/select';
+import { useRoute, useRouter } from 'vue-router';
 import client from '../api/client';
 import ActivityBreakdown from '../components/ActivityBreakdown.vue';
 import AiAnalysisPanel from '../components/AiAnalysisPanel.vue';
 import { useAuthStore } from '../stores/auth';
+import { useHintsStore } from '../stores/hints';
 import { useReportGenerationStore } from '../stores/reportGeneration';
 
 const auth = useAuthStore();
 const generation = useReportGenerationStore();
+const hints = useHintsStore();
+const route = useRoute();
+const router = useRouter();
 
 const employees = ref([]);
 // Дату й працівника тримаємо в сторі: після переходу між сторінками звіти
@@ -89,6 +94,18 @@ const integrationsHint = computed(() => {
   if (!integrations.value.sheets) actions.push('налаштуйте Google Таблицю');
   return `Щоб формувати звіти, ${actions.join(' і ')} на сторінці «Інтеграції».`;
 });
+
+// День, про який нагадує підказка в меню (немає звіту чи задач у Планах).
+// Якщо працівник цього дня не працював — прибирає нагадування тут, на самому дні.
+const isHintedDay = computed(() => {
+  if (auth.isAdmin || !selectedDate.value) return false;
+  const iso = toIso(selectedDate.value);
+  return hints.reportDays.some((item) => item.date === iso) || hints.planDays.includes(iso);
+});
+
+function skipSelectedDay() {
+  hints.skip(toIso(selectedDate.value));
+}
 
 const canGenerate = computed(() => !loading.value && !generating.value && !isActive.value && integrationsOk.value && !viewingOther.value && (!auth.isAdmin || selectedEmployee.value));
 
@@ -325,7 +342,19 @@ async function loadIntegrations() {
   }
 }
 
+// Підказка в меню веде сюди з ?date=Y-m-d: відкриваємо звіт за цей день і
+// прибираємо параметр, щоб повторний перехід на ту саму дату теж спрацював.
+function applyQueryDate() {
+  const iso = route.query.date;
+  if (typeof iso !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return;
+  selectedDate.value = new Date(`${iso}T00:00:00`);
+  router.replace({ query: { ...route.query, date: undefined } });
+}
+
+watch(() => route.query.date, applyQueryDate);
+
 onMounted(async () => {
+  applyQueryDate();
   if (!auth.isAdmin) loadIntegrations();
   await loadEmployees();
   await loadReport();
@@ -373,6 +402,15 @@ onMounted(async () => {
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#149d8d" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
           <DatePicker v-model="selectedDate" date-format="dd.mm.yy" :manual-input="false" select-other-months />
         </div>
+        <button
+          v-if="isHintedDay"
+          class="skip-btn"
+          type="button"
+          title="Не нагадувати про цей день у підказках"
+          @click="skipSelectedDay"
+        >
+          Не працював
+        </button>
         <button
           v-if="!viewingOther"
           class="gen-btn"
@@ -640,6 +678,25 @@ onMounted(async () => {
   color: #fff;
   cursor: pointer;
   box-shadow: 0 2px 6px rgba(17, 17, 17, 0.18);
+}
+
+.skip-btn {
+  padding: 12px 18px;
+  border: 1.5px solid var(--line);
+  border-radius: 0;
+  background: var(--surface);
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.skip-btn:hover {
+  color: #111111;
 }
 
 .gen-btn:disabled {
