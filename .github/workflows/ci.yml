@@ -15,6 +15,23 @@ jobs:
     name: Backend (PHP 8.3)
     runs-on: ubuntu-latest
 
+    # Прод із 2026-09-29 на MySQL 8.0 — тести ганяємо на ній же: SQLite у пам'яті
+    # не помічає, наприклад, обрізання рядків довших за VARCHAR чи інших правил
+    # strict-режиму MySQL.
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'
+          MYSQL_DATABASE: teamreporter_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=20
+
     steps:
       - uses: actions/checkout@v7
 
@@ -23,7 +40,7 @@ jobs:
         with:
           php-version: '8.3'
           # Ті самі розширення, що стоять на проді (див. DEPLOY.md, п.1).
-          extensions: sqlite3, mbstring, xml, curl, zip, intl, gd
+          extensions: pdo_mysql, sqlite3, mbstring, xml, curl, zip, intl, gd
           coverage: none
 
       - name: Кеш залежностей Composer
@@ -37,8 +54,8 @@ jobs:
         working-directory: backend
         run: composer install --no-interaction --no-progress --prefer-dist
 
-      # Тести ганяють sqlite в пам'яті (phpunit.xml), але APP_KEY потрібен:
-      # каст 'encrypted' на yaware_password і trello_token без нього падає.
+      # APP_KEY потрібен: каст 'encrypted' на yaware_password і trello_token без
+      # нього падає.
       - name: Оточення
         working-directory: backend
         run: |
@@ -49,8 +66,17 @@ jobs:
         working-directory: backend
         run: ./vendor/bin/pint --test
 
-      - name: Тести
+      # Змінні оточення переважають і .env, і <env> з phpunit.xml (там SQLite у
+      # пам'яті — для швидкого локального прогону).
+      - name: Тести (MySQL)
         working-directory: backend
+        env:
+          DB_CONNECTION: mysql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_DATABASE: teamreporter_test
+          DB_USERNAME: root
+          DB_PASSWORD: ''
         run: php artisan test
 
   frontend:

@@ -80,6 +80,10 @@ class SqliteTransactionLockTest extends TestCase
 
     public function test_application_uses_the_lock_aware_sqlite_connection(): void
     {
+        if (DB::connection()->getDriverName() !== 'sqlite') {
+            $this->markTestSkipped('Застосунок працює не на SQLite.');
+        }
+
         $this->assertInstanceOf(ImmediateSQLiteConnection::class, DB::connection());
     }
 

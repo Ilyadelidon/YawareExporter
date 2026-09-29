@@ -25,8 +25,11 @@ Scheduler (автогенерація звітів) робимо **після** 
 ## 1. Софт на сервері
 
 ```bash
-# PHP 8.3 + розширення (sqlite, mbstring, xml, curl, zip, intl, gd)
-apt install php8.3-fpm php8.3-sqlite3 php8.3-mbstring php8.3-xml php8.3-curl php8.3-zip php8.3-intl php8.3-gd composer
+# PHP 8.3 + розширення (mysql, sqlite — для відкату й тестів, mbstring, xml, curl, zip, intl, gd)
+apt install php8.3-fpm php8.3-mysql php8.3-sqlite3 php8.3-mbstring php8.3-xml php8.3-curl php8.3-zip php8.3-intl php8.3-gd composer
+
+# MySQL 8.0 (з 2026-09-29; база й користувач — розділ 5а)
+apt install mysql-server
 
 # nginx + certbot (Let's Encrypt)
 apt install nginx certbot python3-certbot-nginx
@@ -60,9 +63,9 @@ Chromium з кешу Playwright.
   список змінних (сам `.env` у git не потрапляє); якщо додали нову змінну в
   `config/`, додайте її і в шаблон, інакше на наступному деплої її пропустять
 - `APP_ENV=production`, `APP_DEBUG=false`, `APP_URL=https://<домен>`
-- `DB_CONNECTION=sqlite` (файл лишається). База працює в режимі **WAL** —
-  див. розділ «Бекап бази», просте копіювання `database.sqlite` більше не
-  є коректним бекапом
+- `DB_CONNECTION=mysql` + `DB_HOST`/`DB_PORT`/`DB_DATABASE`/`DB_USERNAME`/`DB_PASSWORD`
+  (розділ 5а). До 2026-09-29 прод жив на SQLite — файл `database/database.sqlite`
+  лишається на сервері як точка відкату
 - Перенести секрети: `TRELLO_API_KEY`, `TRELLO_TEMPLATE_BOARD_ID`,
   `GOOGLE_OAUTH_CLIENT_ID`/`GOOGLE_OAUTH_CLIENT_SECRET`,
   `TELEGRAM_BOT_TOKEN`/`TELEGRAM_BOT_USERNAME`/`TELEGRAM_WEBHOOK_SECRET`
@@ -107,7 +110,63 @@ Chromium). Після деплою нового коду — `systemctl restart`
 стоїть без роботи — заводити його все одно варто, інакше після появи ключа
 розбори мовчки накопичуватимуться в черзі.
 
-## 5а. SQLite у режимі WAL і бекап бази
+## 5а. MySQL (з 2026-09-29) і переїзд із SQLite
+
+Навіщо переїхали: до однієї SQLite-бази одночасно пишуть три queue-воркери,
+PHP-FPM, планувальник, сесії й кеш, і на PHP 8.3 це трималось на двох милицях
+(`ImmediateSQLiteConnection`, `RetryingDatabaseQueue`, див. нижче). MySQL
+знімає саме обмеження «один записувач на всю базу». Обидва класи лишились у
+коді: вони діють лише на SQLite (локальна розробка, тести, відкат).
+
+Особливості, закладені в код:
+
+- JSON-колонки на MySQL — `LONGTEXT`, а не нативний `JSON` (міграція
+  `2026_09_29_000020`): нативний тип переставляє ключі, і Eloquent вважав би
+  кожен перезаписаний знімок зміненим;
+- сесія MySQL у `+00:00` (`DB_TIMEZONE`), як і застосунок;
+- колація `utf8mb4_unicode_ci` — порівняння рядків без урахування регістру
+  (email і так порівнюються через `lower()`).
+
+**Разове налаштування сервера:**
+
+```bash
+apt install mysql-server php8.3-mysql
+mysql <<'SQL'
+CREATE DATABASE teamreporter CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'teamreporter'@'localhost' IDENTIFIED BY '<пароль>';
+GRANT ALL PRIVILEGES ON teamreporter.* TO 'teamreporter'@'localhost';
+SQL
+systemctl reload php8.3-fpm
+```
+
+**Переїзд даних** (сервіс лежить кілька хвилин; `artisan down` зупиняє й
+планувальник). Усі artisan — від `www-data`:
+
+```bash
+cd /var/www/yaware/backend
+A="sudo -u www-data env HOME=/tmp php artisan"
+$A down
+systemctl stop yaware-queue-logins yaware-queue-default yaware-queue-analysis
+sudo -u www-data sqlite3 database/database.sqlite ".backup /var/backups/teamreporter/pre-mysql.sqlite"
+# у .env: DB_CONNECTION=mysql і DB_* з кроку вище
+$A config:clear
+$A migrate --force
+$A db:copy-from-sqlite database/database.sqlite   # звіряє кількість рядків у кожній таблиці
+$A config:cache
+systemctl reload php8.3-fpm
+systemctl start yaware-queue-logins yaware-queue-default yaware-queue-analysis
+$A up
+```
+
+`db:copy-from-sqlite` переносить рядки з тими самими id і відмовляється
+писати в непорожню базу. Колонки, яких уже немає в міграціях (залишки ранніх
+редакцій), пропускає з попередженням.
+
+**Відкат**: повернути `DB_CONNECTION=sqlite` у `.env`, `config:cache`, reload
+FPM, рестарт воркерів. SQLite-файл під час переїзду не змінюється, але все,
+що записали вже в MySQL, при відкаті лишиться там.
+
+### SQLite у режимі WAL (до 2026-09-29; тепер — лише відкат і локальна розробка)
 
 До бази одночасно пишуть три queue-воркери, PHP-FPM на кожен запит API,
 планувальник і сесії з кешем (`SESSION_DRIVER=database`, `CACHE_STORE=database`).
@@ -151,11 +210,13 @@ BACKUP_REMOTE='backup@host:/srv/backups/teamreporter/' /var/www/yaware/ops/backu
 
 Що він робить і чому саме так:
 
-- `sqlite3 .backup` замість `cp` — база в режимі WAL (розділ 5а), просте
-  копіювання лишає свіжі транзакції в `-wal`;
-- **перевіряє копію** `PRAGMA integrity_check` і дивиться, що в ній є звіти:
-  бекап, який не відкривається, гірший за відсутній, бо на нього розраховують.
-  Це і є щоденна перевірка відновлення замість разової ручної;
+- тип бази бере з `DB_CONNECTION` у `backend/.env`: для MySQL —
+  `mysqldump --single-transaction` (узгоджений знімок без блокування таблиць;
+  пароль — через тимчасовий option-файл, не аргументом), для SQLite —
+  `sqlite3 .backup` замість `cp` (база в режимі WAL, розділ 5а);
+- **перевіряє копію**: дамп MySQL мусить закінчуватись рядком `Dump completed`,
+  копія SQLite — пройти `PRAGMA integrity_check`; і дивиться, що в базі є
+  звіти. Бекап, який не відновлюється, гірший за відсутній;
 - тримає останні `BACKUP_KEEP` копій (14) у `BACKUP_DIR`
   (`/var/backups/teamreporter`), стиснутими;
 - якщо задано `BACKUP_REMOTE` — відвозить копію туди через rsync. **Без цього
@@ -174,13 +235,28 @@ Cron — **під `www-data`**, тим самим користувачем, що
 30 3 * * * BACKUP_REMOTE='backup@host:/srv/backups/teamreporter/' /var/www/yaware/ops/backup-db.sh >> /var/www/yaware/backend/storage/logs/backup.log 2>&1
 ```
 
-Запуск від root тут не просто негарний: відкриття WAL-бази створює
+На SQLite запуск від root ще й шкідливий: відкриття WAL-бази створює
 `database.sqlite-shm` з власником root, і queue-воркери втратять доступ до
 бази — та сама пастка, що з artisan у розділі 5а. Для `BACKUP_REMOTE` потрібен
 ssh-ключ у `~www-data/.ssh` (`ssh -o BatchMode=yes`, без пароля) і разова
 перевірка з'єднання руками.
 
-**Відновлення:**
+**Відновлення (MySQL):**
+
+```
+cd /var/www/yaware/backend
+sudo -u www-data env HOME=/tmp php artisan down
+systemctl stop yaware-queue-default yaware-queue-logins yaware-queue-analysis
+mysql -e 'DROP DATABASE teamreporter; CREATE DATABASE teamreporter CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;'
+gunzip -c /var/backups/teamreporter/teamreporter-<дата>.sql.gz | mysql teamreporter
+systemctl start yaware-queue-default yaware-queue-logins yaware-queue-analysis
+sudo -u www-data env HOME=/tmp php artisan up
+```
+
+Права користувача `teamreporter` на базу при DROP/CREATE не зникають — GRANT
+видано на ім'я бази.
+
+**Відновлення (SQLite, лише після відкату):**
 
 ```
 systemctl stop yaware-queue-default yaware-queue-logins yaware-queue-analysis
