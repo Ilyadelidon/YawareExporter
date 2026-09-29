@@ -6,6 +6,8 @@ import DataTable from 'primevue/datatable';
 import Column from 'primevue/column';
 import Message from 'primevue/message';
 import client from '../api/client';
+import ProductivityBadge from './ProductivityBadge.vue';
+import { PRODUCTIVITY } from '../constants/productivity';
 import { formatDurationWithSeconds } from '../utils/duration';
 import { pluralUk } from '../utils/plural';
 
@@ -22,12 +24,6 @@ const entries = ref([]);
 const dailyStat = ref(null);
 const productivityFilter = ref(null);
 
-const productivityMeta = {
-  productive: { label: 'Продуктивно', class: 'is-productive' },
-  unproductive: { label: 'Непродуктивно', class: 'is-unproductive' },
-  neutral: { label: 'Нейтрально', class: 'is-neutral' },
-};
-
 const filterOptions = computed(() => {
   const counts = { productive: 0, unproductive: 0, neutral: 0 };
   entries.value.forEach((entry) => {
@@ -37,7 +33,7 @@ const filterOptions = computed(() => {
   });
   return [
     { value: null, label: 'Усі', count: entries.value.length },
-    ...Object.entries(productivityMeta)
+    ...Object.entries(PRODUCTIVITY)
       .filter(([value]) => counts[value] > 0)
       .map(([value, meta]) => ({ value, label: meta.label, count: counts[value] })),
   ];
@@ -151,9 +147,7 @@ watch(() => [props.employeeId, props.date, props.version], load, { immediate: tr
         </Column>
         <Column field="productivity" header="Продуктивність" sortable>
           <template #body="{ data }">
-            <span class="productivity-badge" :class="productivityMeta[data.productivity]?.class">
-              {{ productivityMeta[data.productivity]?.label || data.productivity }}
-            </span>
+            <ProductivityBadge :value="data.productivity" />
           </template>
         </Column>
         <Column field="duration_seconds" header="Час" sortable style="width: 96px">
@@ -308,25 +302,6 @@ watch(() => [props.employeeId, props.date, props.version], load, { immediate: tr
   font-variant-numeric: tabular-nums;
   font-weight: 600;
   color: var(--ink);
-}
-
-.productivity-badge {
-  display: inline-block;
-  padding: 2px 8px;
-  font-size: 11.5px;
-  font-weight: 600;
-  background: var(--line);
-  color: var(--muted);
-}
-
-.productivity-badge.is-productive {
-  background: #d5f2ee;
-  color: #0e7d70;
-}
-
-.productivity-badge.is-unproductive {
-  background: #fbe3e3;
-  color: #b33c3c;
 }
 
 .idle-panel {
