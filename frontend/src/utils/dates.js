@@ -37,3 +37,29 @@ export function toMonthParam(date) {
 export function parseMonthParam(value) {
   return typeof value === 'string' && /^\d{4}-\d{2}$/.test(value) ? new Date(`${value}-01T00:00:00`) : null;
 }
+
+const WEEKDAYS = ['Нд', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+
+/**
+ * Дні місяця для таблиць (Плани, Табель): кожен день місяця з днем тижня і позначками
+ * «вихідний», «сьогодні», «ще не настав».
+ *
+ * @param {string} month Y-m
+ * @param {number} daysInMonth
+ * @param {string} today Y-m-d
+ */
+export function monthDays(month, daysInMonth, today) {
+  const [year, monthNumber] = month.split('-').map(Number);
+  return Array.from({ length: daysInMonth }, (_, i) => {
+    const iso = `${month}-${pad(i + 1)}`;
+    const weekday = new Date(year, monthNumber - 1, i + 1).getDay();
+    return {
+      day: i + 1,
+      iso,
+      weekday: WEEKDAYS[weekday],
+      weekend: weekday === 0 || weekday === 6,
+      today: iso === today,
+      future: iso > today,
+    };
+  });
+}

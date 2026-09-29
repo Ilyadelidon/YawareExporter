@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { filterTasks, groupTasks, monthDays, noteLink, noteText } from '../src/utils/plans';
-import { formatDottedDate, parseMonthParam, toMonthParam } from '../src/utils/dates';
+import { filterTasks, groupTasks, noteLink, noteText } from '../src/utils/plans';
+import { formatDottedDate, monthDays, parseMonthParam, toMonthParam } from '../src/utils/dates';
 
 const task = (id, overrides = {}) => ({
   id, employee_id: 1, section_id: null, status: 'pending', days: {}, ...overrides,

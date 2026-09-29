@@ -10,8 +10,8 @@ import { defaultProject, rememberedProjectId, usePlan } from '../composables/use
 import { usePlanExport } from '../composables/usePlanExport';
 import { useAuthStore } from '../stores/auth';
 import { useHintsStore } from '../stores/hints';
-import { parseMonthParam, toMonthParam } from '../utils/dates';
-import { filterTasks, groupTasks, monthDays } from '../utils/plans';
+import { monthDays, parseMonthParam, toMonthParam } from '../utils/dates';
+import { filterTasks, groupTasks } from '../utils/plans';
 import PlanDayPopover from '../components/plans/PlanDayPopover.vue';
 import PlanExportButton from '../components/plans/PlanExportButton.vue';
 import PlanFilters from '../components/plans/PlanFilters.vue';

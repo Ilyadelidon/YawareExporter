@@ -1,32 +1,7 @@
-// Чиста логіка сторінки «Плани»: дні місяця, фільтр і групування задач.
+// Чиста логіка сторінки «Плани»: фільтр і групування задач.
 import { isClosedStatus } from '../constants/plans';
 
-const WEEKDAYS = ['Нд', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
 const URL_PATTERN = /https?:\/\/\S+/;
-
-/**
- * Колонки таймлайну: кожен день місяця з днем тижня і позначками
- * «вихідний», «сьогодні», «ще не настав».
- *
- * @param {string} month Y-m
- * @param {number} daysInMonth
- * @param {string} today Y-m-d
- */
-export function monthDays(month, daysInMonth, today) {
-  const [year, monthNumber] = month.split('-').map(Number);
-  return Array.from({ length: daysInMonth }, (_, i) => {
-    const iso = `${month}-${String(i + 1).padStart(2, '0')}`;
-    const weekday = new Date(year, monthNumber - 1, i + 1).getDay();
-    return {
-      day: i + 1,
-      iso,
-      weekday: WEEKDAYS[weekday],
-      weekend: weekday === 0 || weekday === 6,
-      today: iso === today,
-      future: iso > today,
-    };
-  });
-}
 
 /**
  * Задачі під фільтр виконавця й «Активні задачі». Закриту задачу лишаємо,
