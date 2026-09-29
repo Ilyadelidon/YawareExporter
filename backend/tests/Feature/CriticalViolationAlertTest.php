@@ -247,7 +247,9 @@ class CriticalViolationAlertTest extends TestCase
         ])
             ->assertOk()
             // Однакові адреси зводяться в одну, регістр і пробіли не рахуються.
-            ->assertJsonPath('alert_emails', ['boss@example.com', 'second@example.com']);
+            ->assertJsonPath('alert_emails', ['boss@example.com', 'second@example.com'])
+            ->assertJsonPath('others_count', 1)
+            ->assertJsonPath('max_emails', 10);
 
         $this->assertSame(['boss@example.com', 'second@example.com'], $admin->fresh()->alertEmails());
 
@@ -265,6 +267,28 @@ class CriticalViolationAlertTest extends TestCase
             ->assertJsonPath('alert_emails', []);
 
         $this->assertSame([], $admin->fresh()->alertEmails());
+    }
+
+    public function test_shared_address_is_not_counted_as_someone_elses(): void
+    {
+        $admin = $this->admin(['boss@example.com']);
+        $this->admin(['Team@example.com', 'deputy@example.com']);
+        // Не адміністратор — його адреси листів не отримують.
+        User::factory()->create(['role' => User::ROLE_EMPLOYEE, 'alert_emails' => ['ivan@example.com']]);
+
+        Sanctum::actingAs($admin);
+
+        $this->getJson('/api/alerts/emails')->assertJsonPath('others_count', 2);
+
+        // Спільна скринька в обох списках — «ще одним адресатом» вона вже не є.
+        $this->putJson('/api/alerts/emails', ['alert_emails' => ['boss@example.com', 'team@example.com']])
+            ->assertOk()
+            ->assertJsonPath('others_count', 1);
+
+        $this->assertSame(
+            ['boss@example.com', 'team@example.com', 'deputy@example.com'],
+            User::adminAlertEmails(),
+        );
     }
 
     public function test_alert_email_list_has_a_limit(): void

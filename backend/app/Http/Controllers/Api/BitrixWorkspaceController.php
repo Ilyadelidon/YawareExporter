@@ -3,7 +3,6 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\BitrixAccount;
 use App\Models\BitrixWorkspace;
 use App\Services\BitrixOAuth;
 use Illuminate\Http\JsonResponse;
@@ -14,6 +13,9 @@ use Illuminate\Http\Request;
  * реєструє на порталі локальний застосунок (OAuth 2.0) і зберігає тут його
  * реквізити. Доступ до тасок дає не він, а особистий токен кожного
  * працівника ([[BitrixAccountController]]).
+ *
+ * Зміни відповідають тим самим станом, що й show, — сторінці не треба
+ * перепитувати його окремим запитом.
  */
 class BitrixWorkspaceController extends Controller
 {
@@ -22,16 +24,7 @@ class BitrixWorkspaceController extends Controller
 
     public function show(): JsonResponse
     {
-        $workspace = BitrixWorkspace::active();
-
-        return response()->json([
-            'connected' => $workspace !== null,
-            'portal_url' => $workspace?->portal_url,
-            'portal_host' => $workspace?->portalHost(),
-            'connected_by' => $workspace?->connectedBy?->name,
-            // Той самий шлях повернення треба вписати в застосунок на порталі.
-            'redirect_uri' => BitrixOAuth::redirectUri(),
-        ]);
+        return response()->json($this->state());
     }
 
     /**
@@ -49,16 +42,15 @@ class BitrixWorkspaceController extends Controller
             'portal_url.regex' => 'Очікується адреса порталу вигляду https://ваш-портал.bitrix24.ua',
         ]);
 
-        $workspace = BitrixWorkspace::connect([
+        BitrixWorkspace::connect([
             'portal_url' => rtrim(trim($validated['portal_url']), '/'),
             'client_id' => trim($validated['client_id']),
             'client_secret' => trim($validated['client_secret']),
             'connected_by' => $request->user()->id,
         ]);
 
-        return response()->json([
+        return response()->json($this->state() + [
             'message' => 'Портал Бітрікс24 підключено. Тепер кожен працівник авторизується на ньому сам.',
-            'portal_url' => $workspace->portal_url,
         ], 201);
     }
 
@@ -67,9 +59,23 @@ class BitrixWorkspaceController extends Controller
      */
     public function destroy(): JsonResponse
     {
-        BitrixWorkspace::query()->delete();
-        BitrixAccount::query()->delete();
+        BitrixWorkspace::disconnect();
 
-        return response()->json(['message' => 'Портал Бітрікс24 відключено.']);
+        return response()->json($this->state() + ['message' => 'Портал Бітрікс24 відключено.']);
+    }
+
+    /** @return array<string, mixed> */
+    private function state(): array
+    {
+        $workspace = BitrixWorkspace::active();
+
+        return [
+            'connected' => $workspace !== null,
+            'portal_url' => $workspace?->portal_url,
+            'portal_host' => $workspace?->portalHost(),
+            'connected_by' => $workspace?->connectedBy?->name,
+            // Той самий шлях повернення треба вписати в застосунок на порталі.
+            'redirect_uri' => BitrixOAuth::redirectUri(),
+        ];
     }
 }

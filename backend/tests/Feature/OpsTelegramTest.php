@@ -98,7 +98,11 @@ class OpsTelegramTest extends TestCase
             ->assertJsonPath('chats.1.kind', 'private');
 
         $first = $admin->opsTelegramChats()->first();
-        $this->deleteJson("/api/alerts/telegram/{$first->id}")->assertOk();
+        // Відповідь уже містить решту чатів — сторінка не перепитує список.
+        $this->deleteJson("/api/alerts/telegram/{$first->id}")
+            ->assertOk()
+            ->assertJsonCount(1, 'chats')
+            ->assertJsonPath('chats.0.title', 'Ілля (@delidon)');
 
         $this->assertSame(['300'], $admin->opsTelegramChats()->pluck('chat_id')->all());
     }

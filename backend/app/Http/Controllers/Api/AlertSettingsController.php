@@ -20,17 +20,7 @@ class AlertSettingsController extends Controller
 
     public function show(Request $request): JsonResponse
     {
-        /** @var User $user */
-        $user = $request->user();
-
-        return response()->json([
-            'alert_emails' => $user->alertEmails(),
-            // Скільки адрес отримують ці листи повз поточного адміністратора —
-            // щоб керівник бачив, що порушення не залишаться без адресата,
-            // коли він прибере свої.
-            'others_count' => $this->othersCount($user),
-            'max_emails' => self::MAX_EMAILS,
-        ]);
+        return response()->json($this->state($request->user()));
     }
 
     public function update(Request $request): JsonResponse
@@ -41,39 +31,34 @@ class AlertSettingsController extends Controller
             'alert_emails.*' => ['required', 'string', 'email:rfc', 'max:255'],
         ]);
 
-        // Однакові адреси, написані по-різному, зводяться в одну — це не
-        // помилка вводу, а звичайна неуважність, і питати про неї нема сенсу.
-        $emails = User::normaliseAlertEmails($validated['alert_emails']);
-
         /** @var User $user */
         $user = $request->user();
 
-        $user->update(['alert_emails' => $emails]);
+        // Однакові адреси, написані по-різному, зводяться в одну — це не
+        // помилка вводу, а звичайна неуважність, і питати про неї нема сенсу.
+        $user->update(['alert_emails' => User::normaliseAlertEmails($validated['alert_emails'])]);
 
-        return response()->json([
-            'alert_emails' => $emails,
-            'others_count' => $this->othersCount($user),
-            'max_emails' => self::MAX_EMAILS,
+        $emails = $user->alertEmails();
+
+        return response()->json($this->state($user) + [
             'message' => $emails === []
                 ? 'Листи про критичні порушення вимкнено.'
                 : 'Листи про критичні порушення йтимуть на '.implode(', ', $emails).'.',
         ]);
     }
 
-    /**
-     * Адреси інших адміністраторів, яких не буде в списку поточного.
-     */
-    private function othersCount(User $user): int
+    /** @return array<string, mixed> */
+    private function state(User $user): array
     {
         $mine = $user->alertEmails();
 
-        $others = User::where('role', User::ROLE_ADMIN)
-            ->where('id', '!=', $user->id)
-            ->whereNotNull('alert_emails')
-            ->pluck('alert_emails')
-            ->flatMap(fn (mixed $emails) => is_array($emails) ? $emails : [])
-            ->all();
-
-        return count(array_diff(User::normaliseAlertEmails($others), $mine));
+        return [
+            'alert_emails' => $mine,
+            // Скільки адрес отримують ці листи повз поточного адміністратора —
+            // щоб керівник бачив, що порушення не залишаться без адресата,
+            // коли він прибере свої.
+            'others_count' => count(array_diff(User::adminAlertEmails(except: $user), $mine)),
+            'max_emails' => self::MAX_EMAILS,
+        ];
     }
 }

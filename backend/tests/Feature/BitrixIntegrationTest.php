@@ -111,7 +111,10 @@ class BitrixIntegrationTest extends TestCase
             'client_secret' => self::SECRET,
         ])
             ->assertCreated()
-            ->assertJsonPath('portal_url', self::PORTAL);
+            // Відповідь — уже новий стан порталу: сторінка не перепитує його.
+            ->assertJsonPath('connected', true)
+            ->assertJsonPath('portal_url', self::PORTAL)
+            ->assertJsonPath('portal_host', parse_url(self::PORTAL, PHP_URL_HOST));
 
         $workspace = BitrixWorkspace::active();
         $this->assertSame(self::SECRET, $workspace->client_secret);
@@ -157,7 +160,9 @@ class BitrixIntegrationTest extends TestCase
 
         Sanctum::actingAs(User::factory()->create(['role' => User::ROLE_ADMIN]));
 
-        $this->deleteJson('/api/bitrix/workspace')->assertOk();
+        $this->deleteJson('/api/bitrix/workspace')
+            ->assertOk()
+            ->assertJsonPath('connected', false);
 
         $this->assertNull(BitrixWorkspace::active());
         $this->assertSame(0, BitrixAccount::query()->count());

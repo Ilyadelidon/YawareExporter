@@ -35,7 +35,7 @@ class ViolationAlertService
             return;
         }
 
-        $recipients = $this->recipients();
+        $recipients = User::adminAlertEmails();
 
         if ($recipients === []) {
             // Порушення є, а сказати нікому — це варто бачити в логах: інакше
@@ -70,23 +70,5 @@ class ViolationAlertService
         if ($sent) {
             $analysis->update(['alerted_at' => now()]);
         }
-    }
-
-    /**
-     * Пошти всіх адміністраторів, які підписались на сповіщення.
-     *
-     * @return list<string>
-     */
-    private function recipients(): array
-    {
-        $emails = User::where('role', User::ROLE_ADMIN)
-            ->whereNotNull('alert_emails')
-            ->pluck('alert_emails')
-            ->flatMap(fn (mixed $emails) => is_array($emails) ? $emails : [])
-            ->all();
-
-        // Спільну скриньку відділу можуть вписати собі кілька керівників —
-        // зведення до нижнього регістру й унікальності лишає їй один лист.
-        return User::normaliseAlertEmails($emails);
     }
 }

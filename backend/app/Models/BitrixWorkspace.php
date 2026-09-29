@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Портал Бітрікс24 команди: адреса порталу + реквізити локального застосунку
@@ -38,10 +39,23 @@ class BitrixWorkspace extends Model
      */
     public static function connect(array $attributes): self
     {
-        static::query()->delete();
-        BitrixAccount::query()->delete();
+        return DB::transaction(function () use ($attributes) {
+            static::disconnect();
 
-        return static::create($attributes);
+            return static::create($attributes);
+        });
+    }
+
+    /**
+     * Прибирає портал команди разом з токенами працівників: видані на ньому
+     * токени без застосунку, що їх видав, ні до чого не придатні.
+     */
+    public static function disconnect(): void
+    {
+        DB::transaction(function () {
+            static::query()->delete();
+            BitrixAccount::query()->delete();
+        });
     }
 
     /** Хост порталу (team.bitrix24.ua) — з ним звіряємо домен із відповіді OAuth. */

@@ -80,6 +80,24 @@ class User extends Authenticatable
         return $normalised;
     }
 
+    /**
+     * Пошти, на які адміністратори просили слати листи про порушення, —
+     * зведені в один список. Спільну скриньку відділу можуть вписати собі
+     * кілька керівників, і їй має піти один лист, а не кілька.
+     *
+     * @return list<string>
+     */
+    public static function adminAlertEmails(?self $except = null): array
+    {
+        $emails = static::where('role', self::ROLE_ADMIN)
+            ->when($except, fn ($query) => $query->whereKeyNot($except->getKey()))
+            ->whereNotNull('alert_emails')
+            ->pluck('alert_emails')
+            ->flatMap(fn (mixed $emails) => is_array($emails) ? $emails : []);
+
+        return self::normaliseAlertEmails($emails);
+    }
+
     public function hasTrelloConnected(): bool
     {
         return $this->trello_token !== null;
