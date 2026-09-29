@@ -21,3 +21,19 @@ export function formatLongDate(date) {
     .map((part) => part.value)
     .join(' ');
 }
+
+// «2026-09-29» → «29.09.2026».
+export function formatDottedDate(iso) {
+  const [year, month, day] = iso.split('-');
+  return `${day}.${month}.${year}`;
+}
+
+// Місяць у форматі API (Y-m).
+export function toMonthParam(date) {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}`;
+}
+
+// «2026-09» → перше число місяця; інше — null.
+export function parseMonthParam(value) {
+  return typeof value === 'string' && /^\d{4}-\d{2}$/.test(value) ? new Date(`${value}-01T00:00:00`) : null;
+}

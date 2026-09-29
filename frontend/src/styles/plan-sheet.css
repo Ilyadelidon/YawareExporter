@@ -1,0 +1,422 @@
+/* Таблиця плану: спільна для PlanSheet і PlanTaskRow — scoped-стилі таблиці
+   не дістали б до рядків, що є окремим компонентом. Усе під .plan-sheet. */
+
+.plan-sheet {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12.5px;
+}
+
+.plan-sheet th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  border-bottom: 1px solid #dfe5ea;
+  padding: 6px 4px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.plan-sheet td {
+  border-bottom: 1px solid var(--line);
+  padding: 0 4px;
+  height: 40px;
+  vertical-align: middle;
+}
+
+.plan-sheet .col-task,
+.plan-sheet .col-person,
+.plan-sheet .col-status {
+  position: sticky;
+  background: var(--surface);
+  z-index: 1;
+}
+
+.plan-sheet th.col-task,
+.plan-sheet th.col-person,
+.plan-sheet th.col-status {
+  z-index: 3;
+}
+
+.plan-sheet .col-task {
+  left: 0;
+  width: 340px;
+  min-width: 340px;
+  max-width: 340px;
+  padding-left: 8px !important;
+}
+
+.plan-sheet .col-person {
+  left: 340px;
+  width: 120px;
+  min-width: 120px;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+}
+
+.plan-sheet .col-status {
+  left: 460px;
+  width: 156px;
+  min-width: 156px;
+  border-right: 1px solid #dfe5ea;
+}
+
+.plan-sheet th.col-day {
+  text-align: center;
+  padding: 4px 0;
+  line-height: 1.15;
+}
+
+.plan-sheet .day-num {
+  display: block;
+  font-size: 12px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.plan-sheet .day-week {
+  display: block;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--muted-2);
+}
+
+.plan-sheet th.is-today .day-num,
+.plan-sheet th.is-today .day-week {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.plan-sheet .col-day {
+  width: 30px;
+  min-width: 30px;
+  max-width: 30px;
+}
+
+.plan-sheet .col-day.is-weekend {
+  background: #f6f7f8;
+}
+
+.plan-sheet .col-day.is-today {
+  box-shadow: inset 1px 0 0 #b9e0db, inset -1px 0 0 #b9e0db;
+}
+
+/* --- Рядок розділу ---------------------------------------------------- */
+
+.plan-sheet .section-row td {
+  height: 34px;
+  background: #f4f6f7;
+  border-bottom: 1px solid #dfe5ea;
+}
+
+.plan-sheet .col-section {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  padding-left: 12px !important;
+}
+
+.plan-sheet .section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 604px;
+}
+
+.plan-sheet .section-name {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-sheet .section-count {
+  font-size: 11.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.plan-sheet .section-actions {
+  display: flex;
+  gap: 10px;
+  margin-left: auto;
+  padding-right: 10px;
+}
+
+.plan-sheet .link-btn {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.plan-sheet .link-btn:hover {
+  text-decoration: underline;
+}
+
+/* --- Рядок задачі ----------------------------------------------------- */
+
+.plan-sheet .task-row:hover td {
+  background-color: #fafbfb;
+}
+
+.plan-sheet .task-row:hover td.is-weekend {
+  background-color: #f1f3f4;
+}
+
+.plan-sheet .task-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.plan-sheet .now-btn,
+.plan-sheet .now-spacer {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+}
+
+.plan-sheet .now-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid #dfe5ea;
+  background: var(--surface);
+  color: var(--muted-2);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.plan-sheet .now-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.plan-sheet .now-btn.is-on {
+  border-color: var(--accent);
+  background: #d5f2ee;
+}
+
+.plan-sheet .now-btn:disabled {
+  cursor: default;
+}
+
+.plan-sheet .now-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50% !important;
+  background: var(--accent);
+  animation: pulseDot 1.4s ease-in-out infinite;
+}
+
+.plan-sheet .subtasks-toggle,
+.plan-sheet .subtasks-spacer {
+  flex-shrink: 0;
+  width: 30px;
+}
+
+.plan-sheet .subtasks-toggle {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 22px;
+  padding: 0 2px;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+
+.plan-sheet .subtasks-toggle:hover {
+  color: var(--accent);
+}
+
+.plan-sheet .subtasks-toggle svg {
+  transition: transform 0.15s ease;
+}
+
+.plan-sheet .subtasks-toggle.is-open svg {
+  transform: rotate(90deg);
+}
+
+.plan-sheet .subtask-row td {
+  height: 30px;
+}
+
+.plan-sheet .subtask-cell {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  /* Відступ до рівня назви задачі: «зараз» + стрілка підзадач + проміжки. */
+  padding-left: 68px;
+}
+
+.plan-sheet .subtask-title {
+  font-size: 12.5px;
+  color: #2f3437;
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-sheet a.subtask-title:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.plan-sheet .task-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.plan-sheet .task-title {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: #2f3437;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-sheet .task-title.is-editable {
+  cursor: pointer;
+}
+
+.plan-sheet .task-title.is-editable:hover {
+  color: var(--accent);
+}
+
+.plan-sheet .task-row.is-closed .task-title {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.plan-sheet .task-note {
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-sheet .note-link {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.plan-sheet .note-link:hover {
+  text-decoration: underline;
+}
+
+.plan-sheet .status-select,
+.plan-sheet .status-text {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.plan-sheet .status-select {
+  width: 100%;
+  padding: 4px 2px;
+  border: 1px solid transparent;
+  background: transparent;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.plan-sheet .status-select:hover,
+.plan-sheet .status-select:focus {
+  border-color: #dfe5ea;
+  outline: none;
+}
+
+.plan-sheet :is(.status-select, .status-text).is-pending { color: var(--muted); }
+.plan-sheet :is(.status-select, .status-text).is-in_progress { color: var(--accent); }
+.plan-sheet :is(.status-select, .status-text).is-review { color: #9a6a12; }
+.plan-sheet :is(.status-select, .status-text).is-paused { color: #8a8f98; }
+.plan-sheet :is(.status-select, .status-text).is-recurring { color: #0e7d70; }
+.plan-sheet :is(.status-select, .status-text).is-done { color: #6b6b6b; }
+.plan-sheet :is(.status-select, .status-text).is-not_relevant { color: var(--muted-2); }
+
+/* --- Клітинка дня ----------------------------------------------------- */
+
+.plan-sheet .day-cell {
+  padding: 0 !important;
+  position: relative;
+}
+
+.plan-sheet .day-cell.is-editable {
+  cursor: pointer;
+}
+
+.plan-sheet .day-cell.is-editable:not(.is-worked):hover::after {
+  content: '';
+  position: absolute;
+  inset: 9px 6px;
+  border: 1px dashed #9fd3cc;
+}
+
+.plan-sheet .day-cell.is-worked::after {
+  content: '';
+  position: absolute;
+  inset: 9px 4px;
+  background: #8fd0c7;
+}
+
+.plan-sheet .day-cell.is-now::after {
+  background: var(--accent);
+  box-shadow: 0 0 0 2px #d5f2ee, 0 0 0 3px var(--accent);
+}
+
+/* На телефоні три липкі колонки зʼїли б увесь екран: липкою лишається
+   лише вузька колонка задачі. */
+@media (max-width: 760px) {
+  .plan-sheet .col-task {
+    width: 200px;
+    min-width: 200px;
+    max-width: 200px;
+  }
+
+  .plan-sheet .col-person,
+  .plan-sheet .col-status {
+    position: static;
+  }
+
+  .plan-sheet .section-head {
+    width: 200px;
+  }
+
+  .plan-sheet .section-actions {
+    display: none;
+  }
+}
