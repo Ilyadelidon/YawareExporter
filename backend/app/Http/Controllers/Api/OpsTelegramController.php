@@ -7,8 +7,6 @@ use App\Models\OpsTelegramChat;
 use App\Services\TelegramService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Str;
 use Throwable;
 
 /**
@@ -19,8 +17,6 @@ use Throwable;
  */
 class OpsTelegramController extends Controller
 {
-    private const LINK_CODE_TTL_MINUTES = 15;
-
     public function status(Request $request, TelegramService $telegram): JsonResponse
     {
         $chats = $request->user()->opsTelegramChats()->get();
@@ -58,14 +54,9 @@ class OpsTelegramController extends Controller
             'Підключено максимум чатів ('.OpsTelegramChat::MAX_PER_USER.'). Приберіть зайвий, щоб додати новий.',
         );
 
-        $code = Str::random(40);
-        Cache::put(
-            "telegram-link:{$code}",
-            ['user_id' => $request->user()->id, 'target' => 'ops'],
-            now()->addMinutes(self::LINK_CODE_TTL_MINUTES),
-        );
-
-        return response()->json(['url' => $telegram->linkUrl($code)]);
+        return response()->json([
+            'url' => $telegram->issueLink(['user_id' => $request->user()->id, 'target' => 'ops']),
+        ]);
     }
 
     public function unlink(Request $request, OpsTelegramChat $chat): JsonResponse

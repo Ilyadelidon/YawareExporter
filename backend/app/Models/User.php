@@ -85,6 +85,29 @@ class User extends Authenticatable
         return $this->trello_token !== null;
     }
 
+    /** Токен уже перевірено в Trello; дошку працівник обирає наступним кроком. */
+    public function connectTrello(string $token, ?string $username): void
+    {
+        $this->forceFill([
+            'trello_token' => $token,
+            'trello_member_username' => $username,
+        ])->save();
+    }
+
+    public function disconnectTrello(): void
+    {
+        $this->forceFill([
+            'trello_token' => null,
+            'trello_member_username' => null,
+            'trello_board_id' => null,
+        ])->save();
+    }
+
+    public function selectTrelloBoard(string $boardId): void
+    {
+        $this->forceFill(['trello_board_id' => $boardId])->save();
+    }
+
     /**
      * Портал Бітрікса підключає адміністратор на всю команду, а працівник
      * авторизується на ньому особисто — токен у кожного свій.
@@ -104,9 +127,46 @@ class User extends Authenticatable
             : self::TASK_PROVIDER_TRELLO;
     }
 
+    /**
+     * Чи підключений активний таск-трекер — без нього звіт не збере тасків.
+     */
+    public function hasTaskTrackerConnected(): bool
+    {
+        return $this->taskProvider() === self::TASK_PROVIDER_BITRIX
+            ? $this->hasBitrixConnected()
+            : $this->hasTrelloConnected();
+    }
+
+    /** Персональна Google Таблиця, куди вивантажуються звіти. */
+    public function hasSpreadsheet(): bool
+    {
+        return $this->google_spreadsheet_id !== null;
+    }
+
+    public function attachSpreadsheet(string $spreadsheetId): void
+    {
+        $this->forceFill(['google_spreadsheet_id' => $spreadsheetId])->save();
+    }
+
+    /** Файл на Drive лишається — у ньому вже можуть бути звіти. */
+    public function detachSpreadsheet(): void
+    {
+        $this->forceFill(['google_spreadsheet_id' => null])->save();
+    }
+
     public function hasTelegramConnected(): bool
     {
         return $this->telegram_chat_id !== null;
+    }
+
+    public function linkTelegram(string $chatId): void
+    {
+        $this->forceFill(['telegram_chat_id' => $chatId])->save();
+    }
+
+    public function unlinkTelegram(): void
+    {
+        $this->forceFill(['telegram_chat_id' => null])->save();
     }
 
     /**

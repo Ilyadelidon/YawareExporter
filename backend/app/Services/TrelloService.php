@@ -9,10 +9,14 @@ use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
+use Throwable;
 
 class TrelloService implements TaskProvider
 {
     private const API_BASE = 'https://api.trello.com/1';
+
+    /** Скільки тримаємо назву й адресу активної дошки (секунди). */
+    private const BOARD_CACHE_TTL = 3600;
 
     public function __construct(
         private readonly ?string $token = null,
@@ -87,6 +91,45 @@ class TrelloService implements TaskProvider
             ->get(self::API_BASE."/boards/{$boardId}", ['fields' => 'name,shortUrl'])
             ->throw()
             ->json();
+    }
+
+    /**
+     * Посилання на дошку без запиту до API: Trello приймає в /b/ і повний id.
+     */
+    public static function boardUrl(string $boardId): string
+    {
+        return "https://trello.com/b/{$boardId}";
+    }
+
+    /**
+     * Назва й коротке посилання активної дошки користувача. Кешуємо на
+     * годину, щоб кнопки в меню не ходили в API на кожній сторінці;
+     * $fresh перечитує дошку (сторінка інтеграцій має бачити актуальну назву).
+     * null — дошки немає, її видалили або токен відкликали.
+     *
+     * @return array{name: ?string, url: ?string}|null
+     */
+    public static function activeBoard(User $user, bool $fresh = false): ?array
+    {
+        if (! $user->hasTrelloConnected() || ! $user->trello_board_id) {
+            return null;
+        }
+
+        $key = "trello-board-link:{$user->id}:{$user->trello_board_id}";
+
+        if ($fresh) {
+            Cache::forget($key);
+        }
+
+        return Cache::remember($key, self::BOARD_CACHE_TTL, function () use ($user) {
+            try {
+                $board = self::forUser($user)->board($user->trello_board_id);
+            } catch (Throwable) {
+                return null;
+            }
+
+            return ['name' => $board['name'] ?? null, 'url' => $board['shortUrl'] ?? null];
+        });
     }
 
     /**

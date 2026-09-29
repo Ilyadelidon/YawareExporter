@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\User;
 use App\Services\TrelloService;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\JsonResponse;
@@ -17,22 +18,15 @@ class TrelloAccountController extends Controller
     public function status(Request $request): JsonResponse
     {
         $user = $request->user();
-        $board = [];
-
-        if ($user->hasTrelloConnected() && $user->trello_board_id) {
-            try {
-                $board = TrelloService::forUser($user)->board($user->trello_board_id);
-            } catch (RequestException) {
-                // Дошку могли видалити або токен відкликали — статус все одно віддаємо.
-            }
-        }
+        // Дошку могли видалити або токен відкликали — тоді назви немає, статус все одно віддаємо.
+        $board = TrelloService::activeBoard($user, fresh: true);
 
         return response()->json([
             'connected' => $user->hasTrelloConnected(),
             'username' => $user->trello_member_username,
             'board_id' => $user->trello_board_id,
             'board_name' => $board['name'] ?? null,
-            'board_url' => $board['shortUrl'] ?? null,
+            'board_url' => $board['url'] ?? null,
             'api_key' => config('services.trello.key'),
         ]);
     }
@@ -55,10 +49,7 @@ class TrelloAccountController extends Controller
             ], 422);
         }
 
-        $request->user()->forceFill([
-            'trello_token' => $validated['token'],
-            'trello_member_username' => $member['username'] ?? null,
-        ])->save();
+        $request->user()->connectTrello($validated['token'], $member['username'] ?? null);
 
         return response()->json([
             'message' => 'Trello підключено.',
@@ -82,11 +73,7 @@ class TrelloAccountController extends Controller
             }
         }
 
-        $user->forceFill([
-            'trello_token' => null,
-            'trello_member_username' => null,
-            'trello_board_id' => null,
-        ])->save();
+        $user->disconnectTrello();
 
         return response()->json(['message' => 'Trello відключено.']);
     }
@@ -96,11 +83,7 @@ class TrelloAccountController extends Controller
      */
     public function boards(Request $request): JsonResponse
     {
-        $user = $request->user();
-
-        if (! $user->hasTrelloConnected()) {
-            return response()->json(['message' => 'Спершу підключіть Trello.'], 409);
-        }
+        $user = $this->connectedUser($request);
 
         try {
             $boards = TrelloService::forUser($user)->boards();
@@ -116,11 +99,7 @@ class TrelloAccountController extends Controller
      */
     public function createBoard(Request $request): JsonResponse
     {
-        $user = $request->user();
-
-        if (! $user->hasTrelloConnected()) {
-            return response()->json(['message' => 'Спершу підключіть Trello.'], 409);
-        }
+        $user = $this->connectedUser($request);
 
         $validated = $request->validate([
             'name' => ['required', 'string', 'max:255'],
@@ -132,15 +111,11 @@ class TrelloAccountController extends Controller
             return $this->trelloErrorResponse($exception);
         }
 
-        $user->forceFill(['trello_board_id' => $board['id']])->save();
+        $user->selectTrelloBoard($board['id']);
 
         return response()->json([
             'message' => 'Дошку створено.',
-            'board' => [
-                'id' => $board['id'],
-                'name' => $board['name'] ?? $validated['name'],
-                'url' => $board['shortUrl'] ?? $board['url'] ?? null,
-            ],
+            'board' => $this->boardPayload(['name' => $board['name'] ?? $validated['name']] + $board),
         ], 201);
     }
 
@@ -149,11 +124,7 @@ class TrelloAccountController extends Controller
      */
     public function selectBoard(Request $request): JsonResponse
     {
-        $user = $request->user();
-
-        if (! $user->hasTrelloConnected()) {
-            return response()->json(['message' => 'Спершу підключіть Trello.'], 409);
-        }
+        $user = $this->connectedUser($request);
 
         $validated = $request->validate([
             'board_id' => ['required', 'string', 'max:255'],
@@ -172,12 +143,34 @@ class TrelloAccountController extends Controller
             return response()->json(['message' => 'Цю дошку не знайдено серед ваших дощок Trello.'], 422);
         }
 
-        $user->forceFill(['trello_board_id' => $board['id']])->save();
+        $user->selectTrelloBoard($board['id']);
 
         return response()->json([
             'message' => 'Дошку вибрано.',
-            'board' => ['id' => $board['id'], 'name' => $board['name'] ?? null],
+            'board' => $this->boardPayload($board),
         ]);
+    }
+
+    /**
+     * Дії з дошками мають сенс лише з токеном — без нього відповідаємо 409.
+     */
+    private function connectedUser(Request $request): User
+    {
+        $user = $request->user();
+
+        abort_unless($user->hasTrelloConnected(), 409, 'Спершу підключіть Trello.');
+
+        return $user;
+    }
+
+    /** Однакова форма дошки у відповідях створення й вибору. */
+    private function boardPayload(array $board): array
+    {
+        return [
+            'id' => $board['id'],
+            'name' => $board['name'] ?? null,
+            'url' => $board['shortUrl'] ?? $board['url'] ?? TrelloService::boardUrl($board['id']),
+        ];
     }
 
     private function trelloErrorResponse(RequestException $exception): JsonResponse

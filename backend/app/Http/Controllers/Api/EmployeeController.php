@@ -7,6 +7,7 @@ use App\Models\BitrixWorkspace;
 use App\Models\Employee;
 use App\Models\User;
 use App\Services\GoogleSheetsService;
+use App\Services\TrelloService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -44,7 +45,7 @@ class EmployeeController extends Controller
             'trello' => [
                 'connected' => $user->hasTrelloConnected(),
                 'username' => $user->trello_member_username,
-                'board_url' => $user->trello_board_id ? "https://trello.com/b/{$user->trello_board_id}" : null,
+                'board_url' => $user->trello_board_id ? TrelloService::boardUrl($user->trello_board_id) : null,
             ],
             'bitrix' => [
                 // Особистий токен без командного порталу нічого не дає.
@@ -52,8 +53,8 @@ class EmployeeController extends Controller
                 'username' => $bitrix?->bitrix_user_name,
             ],
             'google' => [
-                'connected' => $user->google_spreadsheet_id !== null,
-                'url' => $user->google_spreadsheet_id
+                'connected' => $user->hasSpreadsheet(),
+                'url' => $user->hasSpreadsheet()
                     ? GoogleSheetsService::spreadsheetUrl($user->google_spreadsheet_id)
                     : null,
             ],

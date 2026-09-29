@@ -4,11 +4,12 @@ use App\Http\Controllers\Api\AiAnalysisController;
 use App\Http\Controllers\Api\AlertSettingsController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\BitrixAccountController;
+use App\Http\Controllers\Api\BitrixWorkspaceController;
 use App\Http\Controllers\Api\EmployeeController;
 use App\Http\Controllers\Api\EmployeeMemoryController;
 use App\Http\Controllers\Api\GoogleSpreadsheetController;
 use App\Http\Controllers\Api\HintController;
-use App\Http\Controllers\Api\IntegrationLinkController;
+use App\Http\Controllers\Api\IntegrationController;
 use App\Http\Controllers\Api\OpsTelegramController;
 use App\Http\Controllers\Api\PlanGoogleController;
 use App\Http\Controllers\Api\PlanProjectController;
@@ -18,6 +19,7 @@ use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\StatsController;
 use App\Http\Controllers\Api\TaskController;
 use App\Http\Controllers\Api\TelegramController;
+use App\Http\Controllers\Api\TelegramWebhookController;
 use App\Http\Controllers\Api\TimesheetController;
 use App\Http\Controllers\Api\TrelloAccountController;
 use Illuminate\Support\Facades\Route;
@@ -31,7 +33,7 @@ Route::get('/auth/login/pending/{checkId}', [AuthController::class, 'loginStatus
     ->middleware('throttle:30,1');
 
 // Вебхук Telegram: без auth (його кличе Telegram), захищений секретом у заголовку.
-Route::post('/telegram/webhook', [TelegramController::class, 'webhook'])->middleware('throttle:60,1');
+Route::post('/telegram/webhook', TelegramWebhookController::class)->middleware('throttle:60,1');
 
 // Повернення з авторизації Бітрікса: браузер працівника приходить сюди без
 // токена Sanctum, тож упізнаємо його за одноразовим state з посилання.
@@ -64,7 +66,7 @@ Route::middleware(['auth:sanctum', 'not-dismissed'])->group(function () {
     // працівник лише починає власну авторизацію на цьому порталі.
     Route::get('/bitrix/status', [BitrixAccountController::class, 'status']);
     Route::post('/bitrix/oauth/start', [BitrixAccountController::class, 'startAuthorization']);
-    Route::delete('/bitrix/user', [BitrixAccountController::class, 'destroyUser']);
+    Route::delete('/bitrix/user', [BitrixAccountController::class, 'destroy']);
 
     Route::get('/telegram/status', [TelegramController::class, 'status']);
     Route::post('/telegram/link', [TelegramController::class, 'link']);
@@ -75,8 +77,10 @@ Route::middleware(['auth:sanctum', 'not-dismissed'])->group(function () {
     Route::post('/google/spreadsheet/link', [GoogleSpreadsheetController::class, 'link']);
     Route::delete('/google/spreadsheet', [GoogleSpreadsheetController::class, 'destroy']);
 
-    // Готові посилання на підключені сервіси — кнопки переходу в боковому меню.
-    Route::get('/integrations/links', [IntegrationLinkController::class, 'index']);
+    // Готовність до звіту (трекер + таблиця) і готові посилання на підключені
+    // сервіси — кнопки переходу в боковому меню.
+    Route::get('/integrations/status', [IntegrationController::class, 'status']);
+    Route::get('/integrations/links', [IntegrationController::class, 'links']);
 
     // Підказки працівнику в боковому меню: пропущені звіти й дні без задач у планах.
     Route::get('/hints', [HintController::class, 'index']);
@@ -109,8 +113,9 @@ Route::middleware(['auth:sanctum', 'not-dismissed'])->group(function () {
         Route::delete('/plans/google', [PlanGoogleController::class, 'unlink']);
         Route::post('/plans/export', [PlanGoogleController::class, 'export'])->middleware('throttle:5,1');
 
-        Route::post('/bitrix/workspace', [BitrixAccountController::class, 'storeWorkspace']);
-        Route::delete('/bitrix/workspace', [BitrixAccountController::class, 'destroyWorkspace']);
+        Route::get('/bitrix/workspace', [BitrixWorkspaceController::class, 'show']);
+        Route::post('/bitrix/workspace', [BitrixWorkspaceController::class, 'store']);
+        Route::delete('/bitrix/workspace', [BitrixWorkspaceController::class, 'destroy']);
 
         // AI-розбір дня бачить лише адміністратор.
         Route::get('/analysis', [AiAnalysisController::class, 'show']);

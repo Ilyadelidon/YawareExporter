@@ -4,13 +4,18 @@ namespace App\Services;
 
 use App\Models\OpsTelegramChat;
 use App\Models\User;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Throwable;
 
 class TelegramService
 {
     private const API_BASE = 'https://api.telegram.org/bot';
+
+    /** Скільки живе посилання на бота — стільки є часу натиснути Start. */
+    public const LINK_TTL_MINUTES = 15;
 
     public function isConfigured(): bool
     {
@@ -30,6 +35,32 @@ class TelegramService
     public function linkUrl(string $code): string
     {
         return 'https://t.me/'.$this->botUsername().'?start='.$code;
+    }
+
+    /**
+     * Одноразове посилання на бота. У кеші під кодом лежить, що саме
+     * прив'язати: id користувача (особисті сповіщення) або масив з
+     * target=ops (технічний чат адміністратора). Бот обміняє код на chat_id
+     * у вебхуку.
+     */
+    public function issueLink(int|array $payload): string
+    {
+        $code = Str::random(40);
+
+        Cache::put(self::linkKey($code), $payload, now()->addMinutes(self::LINK_TTL_MINUTES));
+
+        return $this->linkUrl($code);
+    }
+
+    /** Що прив'язати за кодом із /start; код одноразовий. */
+    public function pullLink(string $code): mixed
+    {
+        return $code !== '' ? Cache::pull(self::linkKey($code)) : null;
+    }
+
+    private static function linkKey(string $code): string
+    {
+        return "telegram-link:{$code}";
     }
 
     /**

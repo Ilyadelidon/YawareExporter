@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\BitrixWorkspace;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use RuntimeException;
@@ -28,10 +29,39 @@ class BitrixOAuth
             : null;
     }
 
-    /** Одноразовий state, яким callback упізнає, чия це авторизація. */
-    public static function newState(): string
+    /**
+     * Одноразовий state, яким callback упізнає, чия це авторизація: браузер
+     * повертається з порталу без сесії користувача.
+     */
+    public static function issueState(int $userId): string
     {
-        return Str::random(48);
+        $state = Str::random(48);
+
+        Cache::put(self::stateKey($state), $userId, now()->addMinutes(self::STATE_TTL_MINUTES));
+
+        return $state;
+    }
+
+    /** Власник state; після першого ж звернення state недійсний. */
+    public static function pullStateOwner(string $state): ?int
+    {
+        $userId = Cache::pull(self::stateKey($state));
+
+        return $userId ? (int) $userId : null;
+    }
+
+    /**
+     * Той самий redirect_uri має бути вказаний у налаштуваннях застосунку на
+     * порталі — Бітрікс звіряє його побайтово.
+     */
+    public static function redirectUri(): string
+    {
+        return url('/api/bitrix/oauth/callback');
+    }
+
+    private static function stateKey(string $state): string
+    {
+        return 'bitrix.oauth.state.'.$state;
     }
 
     /**

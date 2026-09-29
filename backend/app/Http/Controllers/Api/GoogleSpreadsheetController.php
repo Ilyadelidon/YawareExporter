@@ -3,10 +3,12 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\User;
 use App\Services\GoogleSheetsService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use RuntimeException;
 use Throwable;
 
 class GoogleSpreadsheetController extends Controller
@@ -18,24 +20,24 @@ class GoogleSpreadsheetController extends Controller
     public function status(Request $request, GoogleSheetsService $sheets): JsonResponse
     {
         $user = $request->user();
+        $accountConnected = $sheets->hasGoogleAccount();
+        $spreadsheetId = $user->google_spreadsheet_id;
         $title = null;
 
-        if ($sheets->hasGoogleAccount() && $user->google_spreadsheet_id) {
+        if ($accountConnected && $spreadsheetId) {
             try {
-                $title = $sheets->spreadsheetTitle($user->google_spreadsheet_id);
+                $title = $sheets->spreadsheetTitle($spreadsheetId);
             } catch (Throwable) {
                 // Таблицю могли видалити — статус все одно віддаємо.
             }
         }
 
         return response()->json([
-            'account_connected' => $sheets->hasGoogleAccount(),
+            'account_connected' => $accountConnected,
             // Кому давати доступ редактора при підключенні власної таблиці.
-            'account_email' => $sheets->hasGoogleAccount() ? $sheets->accountEmail() : null,
-            'spreadsheet_id' => $user->google_spreadsheet_id,
-            'spreadsheet_url' => $user->google_spreadsheet_id
-                ? GoogleSheetsService::spreadsheetUrl($user->google_spreadsheet_id)
-                : null,
+            'account_email' => $accountConnected ? $sheets->accountEmail() : null,
+            'spreadsheet_id' => $spreadsheetId,
+            'spreadsheet_url' => $spreadsheetId ? GoogleSheetsService::spreadsheetUrl($spreadsheetId) : null,
             'spreadsheet_title' => $title,
         ]);
     }
@@ -46,18 +48,7 @@ class GoogleSpreadsheetController extends Controller
     public function store(Request $request, GoogleSheetsService $sheets): JsonResponse
     {
         $user = $request->user();
-
-        if (! $sheets->hasGoogleAccount()) {
-            return response()->json([
-                'message' => 'Google-акаунт не підключено — попросіть адміністратора авторизуватися на /google/auth.',
-            ], 409);
-        }
-
-        if ($user->google_spreadsheet_id) {
-            return response()->json([
-                'message' => 'Персональна таблиця вже створена. Спершу відв\'яжіть поточну.',
-            ], 409);
-        }
+        $this->ensureCanAttach($user, $sheets);
 
         $validated = $request->validate([
             'name' => ['nullable', 'string', 'max:255'],
@@ -78,7 +69,7 @@ class GoogleSpreadsheetController extends Controller
             ], 502);
         }
 
-        $user->forceFill(['google_spreadsheet_id' => $spreadsheet['id']])->save();
+        $user->attachSpreadsheet($spreadsheet['id']);
 
         return response()->json([
             'message' => 'Таблицю створено — посилання надіслано на email.',
@@ -96,18 +87,7 @@ class GoogleSpreadsheetController extends Controller
     public function link(Request $request, GoogleSheetsService $sheets): JsonResponse
     {
         $user = $request->user();
-
-        if (! $sheets->hasGoogleAccount()) {
-            return response()->json([
-                'message' => 'Google-акаунт не підключено — попросіть адміністратора авторизуватися на /google/auth.',
-            ], 409);
-        }
-
-        if ($user->google_spreadsheet_id) {
-            return response()->json([
-                'message' => 'Таблиця вже підключена. Спершу відв\'яжіть поточну.',
-            ], 409);
-        }
+        $this->ensureCanAttach($user, $sheets);
 
         $validated = $request->validate([
             'spreadsheet' => ['required', 'string', 'max:2048'],
@@ -123,7 +103,7 @@ class GoogleSpreadsheetController extends Controller
 
         try {
             $title = $sheets->verifyEditableSpreadsheet($spreadsheetId);
-        } catch (\RuntimeException $exception) {
+        } catch (RuntimeException $exception) {
             // Людське пояснення з перевірки доступу — віддаємо як є.
             return response()->json(['message' => $exception->getMessage()], 422);
         } catch (Throwable $exception) {
@@ -134,7 +114,7 @@ class GoogleSpreadsheetController extends Controller
             ], 502);
         }
 
-        $user->forceFill(['google_spreadsheet_id' => $spreadsheetId])->save();
+        $user->attachSpreadsheet($spreadsheetId);
 
         return response()->json([
             'message' => "Таблицю «{$title}» підключено — звіти вивантажуватимуться в неї.",
@@ -150,8 +130,23 @@ class GoogleSpreadsheetController extends Controller
      */
     public function destroy(Request $request): JsonResponse
     {
-        $request->user()->forceFill(['google_spreadsheet_id' => null])->save();
+        $request->user()->detachSpreadsheet();
 
         return response()->json(['message' => 'Персональну таблицю відв\'язано.']);
+    }
+
+    /**
+     * Нову таблицю (створену чи наявну) можна підключити лише через
+     * Google-акаунт сервісу і лише замість відв'язаної.
+     */
+    private function ensureCanAttach(User $user, GoogleSheetsService $sheets): void
+    {
+        abort_unless(
+            $sheets->hasGoogleAccount(),
+            409,
+            'Google-акаунт не підключено — попросіть адміністратора авторизуватися на /google/auth.',
+        );
+
+        abort_if($user->hasSpreadsheet(), 409, 'Таблиця вже підключена. Спершу відв\'яжіть поточну.');
     }
 }

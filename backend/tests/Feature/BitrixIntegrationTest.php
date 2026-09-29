@@ -448,12 +448,40 @@ class BitrixIntegrationTest extends TestCase
             ->assertJson([
                 'workspace_connected' => true,
                 'portal_url' => self::PORTAL,
+                'portal_host' => 'team.bitrix24.ua',
                 'user_id' => '7',
                 'user_name' => 'Іван Петренко',
                 'user_email' => 'ivan@team.ua',
                 'connected' => true,
-                'can_manage' => false,
+            ])
+            // Реквізити застосунку й шлях повернення — справа адміністратора.
+            ->assertJsonMissingPath('redirect_uri')
+            ->assertJsonMissingPath('connected_by');
+    }
+
+    public function test_admin_sees_portal_setup_details(): void
+    {
+        $admin = User::factory()->create(['role' => User::ROLE_ADMIN]);
+        $this->workspace()->forceFill(['connected_by' => $admin->id])->save();
+        Sanctum::actingAs($admin);
+
+        $this->getJson('/api/bitrix/workspace')
+            ->assertOk()
+            ->assertJson([
+                'connected' => true,
+                'portal_url' => self::PORTAL,
+                'portal_host' => 'team.bitrix24.ua',
+                'connected_by' => $admin->name,
+                'redirect_uri' => url('/api/bitrix/oauth/callback'),
             ]);
+    }
+
+    public function test_portal_setup_details_are_admin_only(): void
+    {
+        $this->workspace();
+        Sanctum::actingAs(User::factory()->create());
+
+        $this->getJson('/api/bitrix/workspace')->assertForbidden();
     }
 
     public function test_provider_switch_keeps_both_integrations_configured(): void

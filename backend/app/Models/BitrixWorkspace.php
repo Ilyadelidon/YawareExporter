@@ -50,6 +50,12 @@ class BitrixWorkspace extends Model
         return (string) parse_url($this->portal_url, PHP_URL_HOST);
     }
 
+    /** Особистий список задач працівника на порталі. */
+    public function userTasksUrl(string $bitrixUserId): string
+    {
+        return rtrim($this->portal_url, '/')."/company/personal/user/{$bitrixUserId}/tasks/";
+    }
+
     public function connectedBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'connected_by');
