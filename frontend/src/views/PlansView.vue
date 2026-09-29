@@ -8,6 +8,7 @@ import DatePicker from 'primevue/datepicker';
 import Message from 'primevue/message';
 import Popover from 'primevue/popover';
 import client from '../api/client';
+import { TRACKER_LABELS } from '../constants/trackers';
 import { useAuthStore } from '../stores/auth';
 import { useHintsStore } from '../stores/hints';
 import PlanGoogleDialog from '../components/PlanGoogleDialog.vue';
@@ -21,13 +22,13 @@ const LAST_PROJECT_KEY = 'plans.lastProject';
 // Трекер, з яким звʼязана задача плану, — підписи для посилання й стану.
 const TRACKERS = {
   bitrix: {
-    label: 'Бітрікс24',
+    label: TRACKER_LABELS.bitrix,
     linkHint: 'Задача в Бітрікс24 з тегом «План»',
     unlinked: 'поза Бітріксом',
     unlinkedHint: 'У Бітріксі задачу видалили або зняли з неї тег «План» — у плані вона лишилась, але більше не синхронізується',
   },
   trello: {
-    label: 'Trello',
+    label: TRACKER_LABELS.trello,
     linkHint: 'Картка Trello з міткою «План»',
     unlinked: 'поза Trello',
     unlinkedHint: 'У Trello картку архівували, видалили або зняли з неї мітку «План» — у плані вона лишилась, але більше не синхронізується',

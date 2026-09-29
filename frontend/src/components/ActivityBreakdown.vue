@@ -7,6 +7,7 @@ import Column from 'primevue/column';
 import Message from 'primevue/message';
 import client from '../api/client';
 import { formatDurationWithSeconds } from '../utils/duration';
+import { pluralUk } from '../utils/plural';
 
 const props = defineProps({
   employeeId: { type: Number, required: true },
@@ -46,20 +47,11 @@ const filteredEntries = computed(() => entries.value.filter(
   (entry) => !productivityFilter.value || entry.productivity === productivityFilter.value,
 ));
 
-function activitiesWord(n) {
-  const mod10 = n % 10;
-  const mod100 = n % 100;
-  if (mod100 >= 11 && mod100 <= 14) return 'діяльностей';
-  if (mod10 === 1) return 'діяльність';
-  if (mod10 >= 2 && mod10 <= 4) return 'діяльності';
-  return 'діяльностей';
-}
-
 const headNote = computed(() => {
   if (loading.value || errorMessage.value || !entries.value.length) {
     return '';
   }
-  return `${entries.value.length} ${activitiesWord(entries.value.length)}`;
+  return `${entries.value.length} ${pluralUk(entries.value.length, ['діяльність', 'діяльності', 'діяльностей'])}`;
 });
 
 // idle_activities — знімок таблиці «Офлайн активність» з Yaware: перший рядок

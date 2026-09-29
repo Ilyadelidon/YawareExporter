@@ -1,8 +1,8 @@
 import { defineStore } from 'pinia';
 import client from '../api/client';
+import { isReportActive } from '../constants/report';
 
 const POLL_MS = 5000;
-const ACTIVE = ['pending', 'processing'];
 
 let pollTimer = null;
 
@@ -20,7 +20,7 @@ export const useReportGenerationStore = defineStore('reportGeneration', {
   }),
 
   getters: {
-    isActive: (state) => ACTIVE.includes(state.report?.status),
+    isActive: (state) => isReportActive(state.report),
   },
 
   actions: {

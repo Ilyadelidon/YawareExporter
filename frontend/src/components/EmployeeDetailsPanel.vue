@@ -3,6 +3,7 @@
 // його активності. Пам'ять AI вантажиться окремим запитом, тож лише коли
 // відкрили її вкладку; інтеграції вже приїхали разом зі списком.
 import { computed, ref } from 'vue';
+import { TRACKER_LABELS } from '../constants/trackers';
 import EmployeeMemoryPanel from './EmployeeMemoryPanel.vue';
 
 const props = defineProps({
@@ -29,7 +30,7 @@ const rows = computed(() => {
   return [
     {
       key: 'trello',
-      label: 'Trello',
+      label: TRACKER_LABELS.trello,
       connected: info.trello.connected,
       detail: info.trello.username ? `@${info.trello.username}` : null,
       note: info.trello.connected && !info.trello.board_url ? 'дошку не обрано' : trackerNote('trello'),
@@ -38,7 +39,7 @@ const rows = computed(() => {
     },
     {
       key: 'bitrix',
-      label: 'Бітрікс24',
+      label: TRACKER_LABELS.bitrix,
       connected: info.bitrix.connected,
       detail: info.bitrix.username,
       note: trackerNote('bitrix'),

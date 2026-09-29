@@ -11,3 +11,13 @@ export function shiftIsoDate(iso, days) {
   date.setDate(date.getDate() + days);
   return toIsoDate(date);
 }
+
+const longDateFormat = new Intl.DateTimeFormat('uk-UA', { day: 'numeric', month: 'long', year: 'numeric' });
+
+// «29 вересня 2026» — без суфікса «р.», який додає сам Intl.
+export function formatLongDate(date) {
+  return longDateFormat.formatToParts(date)
+    .filter((part) => ['day', 'month', 'year'].includes(part.type))
+    .map((part) => part.value)
+    .join(' ');
+}
