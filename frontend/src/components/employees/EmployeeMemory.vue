@@ -6,95 +6,27 @@ import { onMounted, ref } from 'vue';
 import DataTable from 'primevue/datatable';
 import Column from 'primevue/column';
 import Message from 'primevue/message';
-import client from '../api/client';
+import { useEmployeeMemory } from '../../composables/useEmployeeMemory';
+import { VERDICT_OPTIONS, verdictClass } from '../../utils/employees';
+import CellInput from './CellInput.vue';
 
 const props = defineProps({
   employeeId: { type: Number, required: true },
 });
 
-const rows = ref([]);
-const loading = ref(true);
-const errorMessage = ref('');
-const savingId = ref(null);
-const recheckDays = ref(90);
+const { rows, loading, error, savingId, addingFact, recheckDays, load, save, remove, addFact } =
+  useEmployeeMemory(props.employeeId);
+
 const newFact = ref({ name: '', note: '' });
-const addingFact = ref(false);
 
-const verdictOptions = [
-  { value: 'work_related', label: 'Робоче' },
-  { value: 'personal', label: 'Особисте' },
-  { value: 'unknown', label: 'Невідомо' },
-];
-
-const verdictClass = {
-  work_related: 'is-work',
-  personal: 'is-personal',
-  unknown: 'is-unknown',
-};
-
-async function load() {
-  loading.value = true;
-  try {
-    const { data } = await client.get(`/employees/${props.employeeId}/memory`);
-    rows.value = data.data;
-    recheckDays.value = data.recheck_days;
-    errorMessage.value = '';
-  } catch (error) {
-    errorMessage.value = error.response?.data?.message || 'Не вдалося завантажити пам\'ять.';
-  } finally {
-    loading.value = false;
-  }
-}
-
-async function save(row, changes) {
-  savingId.value = row.id;
-  errorMessage.value = '';
-  try {
-    const { data } = await client.patch(
-      `/employees/${props.employeeId}/memory/${row.id}`,
-      { verdict: row.verdict, note: row.note, ...changes },
-    );
-    Object.assign(row, data.data);
-  } catch (error) {
-    errorMessage.value = error.response?.data?.message || 'Не вдалося зберегти.';
-    await load();
-  } finally {
-    savingId.value = null;
-  }
-}
-
-async function remove(row) {
-  savingId.value = row.id;
-  try {
-    await client.delete(`/employees/${props.employeeId}/memory/${row.id}`);
-    rows.value = rows.value.filter((item) => item.id !== row.id);
-  } catch (error) {
-    errorMessage.value = error.response?.data?.message || 'Не вдалося видалити.';
-  } finally {
-    savingId.value = null;
-  }
-}
-
-async function addFact() {
+async function submitFact() {
   const name = newFact.value.name.trim();
   if (!name) {
     return;
   }
 
-  addingFact.value = true;
-  errorMessage.value = '';
-  try {
-    await client.post(`/employees/${props.employeeId}/memory`, {
-      kind: 'fact',
-      name,
-      note: newFact.value.note.trim() || null,
-    });
+  if (await addFact({ name, note: newFact.value.note.trim() || null })) {
     newFact.value = { name: '', note: '' };
-    await load();
-  } catch (error) {
-    errorMessage.value = error.response?.data?.message || 'Не вдалося додати факт.';
-  } finally {
-    addingFact.value = false;
   }
 }
 
@@ -103,7 +35,7 @@ onMounted(load);
 
 <template>
   <div class="memory-panel">
-    <Message v-if="errorMessage" severity="warn" :closable="false">{{ errorMessage }}</Message>
+    <Message v-if="error" severity="warn" :closable="false">{{ error }}</Message>
 
     <div v-if="loading" class="skeleton memory-skeleton"></div>
 
@@ -120,11 +52,11 @@ onMounted(load);
               v-if="data.kind === 'activity'"
               v-model="data.verdict"
               class="memory-select"
-              :class="verdictClass[data.verdict]"
+              :class="verdictClass(data.verdict)"
               :disabled="savingId === data.id"
               @change="save(data)"
             >
-              <option v-for="option in verdictOptions" :key="option.value" :value="option.value">
+              <option v-for="option in VERDICT_OPTIONS" :key="option.value" :value="option.value">
                 {{ option.label }}
               </option>
             </select>
@@ -133,15 +65,12 @@ onMounted(load);
         </Column>
         <Column field="note" header="Нотатка">
           <template #body="{ data }">
-            <input
-              class="cell-input"
-              type="text"
+            <CellInput
+              :value="data.note"
               placeholder="—"
-              :value="data.note || ''"
               :disabled="savingId === data.id"
-              @change="save(data, { note: $event.target.value.trim() || null })"
-              @keyup.enter="$event.target.blur()"
-            >
+              @commit="save(data, { note: $event })"
+            />
           </template>
         </Column>
         <Column field="occurrences" header="Днів" sortable style="width: 70px">
@@ -169,11 +98,11 @@ onMounted(load);
         </Column>
       </DataTable>
 
-      <div class="memory-add">
+      <form class="memory-add" @submit.prevent="submitFact">
         <input v-model="newFact.name" class="memory-input" type="text" placeholder="Факт про робочий контекст">
         <input v-model="newFact.note" class="memory-input" type="text" placeholder="Пояснення (необовʼязково)">
-        <button type="button" class="memory-action" :disabled="addingFact" @click="addFact">Додати</button>
-      </div>
+        <button type="submit" class="memory-action" :disabled="addingFact">Додати</button>
+      </form>
 
       <p class="memory-hint">
         Вердикти AI переперевіряються раз на {{ recheckDays }} днів. Виправлений
@@ -228,26 +157,6 @@ onMounted(load);
 
 .memory-select:disabled {
   opacity: 0.55;
-}
-
-.cell-input {
-  width: 100%;
-  min-width: 160px;
-  padding: 4px 6px;
-  border: 1px solid transparent;
-  background: transparent;
-  font: inherit;
-  color: inherit;
-}
-
-.cell-input:hover:not(:disabled) {
-  border-color: var(--line);
-}
-
-.cell-input:focus {
-  outline: none;
-  border-color: var(--accent);
-  background: var(--surface);
 }
 
 .memory-count {

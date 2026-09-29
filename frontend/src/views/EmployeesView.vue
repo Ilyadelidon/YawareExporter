@@ -1,81 +1,38 @@
 <script setup>
+// Працівники (лише адмін): довідник для звітів. Посада правиться прямо в
+// таблиці, у розгорнутому рядку — інтеграції працівника й пам'ять AI.
 import { onMounted, ref } from 'vue';
 import DataTable from 'primevue/datatable';
 import Column from 'primevue/column';
 import Message from 'primevue/message';
-import client from '../api/client';
-import EmployeeDetailsPanel from '../components/EmployeeDetailsPanel.vue';
+import { useEmployees } from '../composables/useEmployees';
+import CellInput from '../components/employees/CellInput.vue';
+import EmployeeDetails from '../components/employees/EmployeeDetails.vue';
+import PlanConfirmDialog from '../components/plans/PlanConfirmDialog.vue';
+import UiIcon from '../components/UiIcon.vue';
 
-const employees = ref([]);
-// Розгорнутий рядок: інтеграції працівника й пам'ять AI (окремий запит, лише за вкладкою).
+const { employees, loading, error, savingId, load, savePosition, dismiss, reinstate } = useEmployees();
+
 const expandedRows = ref({});
-const loading = ref(true);
-const savingId = ref(null);
-const errorMessage = ref('');
 
-async function loadEmployees() {
-  const { data } = await client.get('/employees');
-  employees.value = data.data;
+// Звільнення відкликає доступ одразу й стирає пароль Yaware, тож спершу
+// питаємо підтвердження. Поновити можна, історія лишається.
+// Ціль лишається після закриття, щоб заголовок не зникав під час анімації.
+const dismissing = ref(null);
+const dismissVisible = ref(false);
+
+function askDismiss(employee) {
+  dismissing.value = employee;
+  dismissVisible.value = true;
 }
 
-// Посада редагується прямо в таблиці: її знає лише адміністратор, а окрема
-// форма заради одного поля не потрібна. Зберігаємо на blur/Enter.
-async function savePosition(employee, value) {
-  const position = value.trim() || null;
-  if (position === (employee.position || null)) {
-    return;
-  }
-
-  savingId.value = employee.id;
-  errorMessage.value = '';
-  try {
-    const { data } = await client.patch(`/employees/${employee.id}`, { position });
-    employee.position = data.data.position;
-  } catch (error) {
-    errorMessage.value = error.response?.data?.message || 'Не вдалося зберегти посаду.';
-  } finally {
-    savingId.value = null;
-  }
+async function confirmDismiss() {
+  await dismiss(dismissing.value);
+  // Помилку показує сторінка, тож діалог закриваємо в будь-якому разі.
+  dismissVisible.value = false;
 }
 
-// Звільнення відкликає токени працівника одразу, а пароль Yaware стирає,
-// тож питаємо підтвердження. Поновити можна, історія лишається.
-async function dismiss(employee) {
-  if (!window.confirm(
-    `Видалити ${employee.name} з системи? Він одразу вийде із системи і більше не зайде — навіть якщо лишається в Yaware. `
-    + 'Звіти, активності й Табель за минулі дні збережуться.',
-  )) {
-    return;
-  }
-
-  await toggleDismissal(employee, () => client.post(`/employees/${employee.id}/dismissal`));
-}
-
-async function reinstate(employee) {
-  await toggleDismissal(employee, () => client.delete(`/employees/${employee.id}/dismissal`));
-}
-
-async function toggleDismissal(employee, request) {
-  savingId.value = employee.id;
-  errorMessage.value = '';
-  try {
-    const { data } = await request();
-    employee.dismissed_at = data.data.dismissed_at;
-    employee.active = data.data.active;
-  } catch (error) {
-    errorMessage.value = error.response?.data?.message || 'Не вдалося змінити статус працівника.';
-  } finally {
-    savingId.value = null;
-  }
-}
-
-onMounted(async () => {
-  try {
-    await loadEmployees();
-  } finally {
-    loading.value = false;
-  }
-});
+onMounted(load);
 </script>
 
 <template>
@@ -83,7 +40,7 @@ onMounted(async () => {
     <div class="page-head">
       <div class="page-head-info">
         <div class="page-head-icon">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#149d8d" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+          <UiIcon name="users" :size="20" color="#149d8d" />
         </div>
         <div>
           <div class="page-head-title">Працівники</div>
@@ -92,7 +49,9 @@ onMounted(async () => {
       </div>
     </div>
 
-    <Message v-if="errorMessage" severity="error" :closable="false" class="page-message">{{ errorMessage }}</Message>
+    <Message v-if="error" severity="error" :closable="true" class="page-message" @close="error = ''">
+      {{ error }}
+    </Message>
 
     <div class="panel table-panel">
       <DataTable v-model:expanded-rows="expandedRows" :value="employees" :loading="loading" data-key="id">
@@ -100,21 +59,18 @@ onMounted(async () => {
           <div class="table-empty">Працівників поки немає.</div>
         </template>
         <template #expansion="{ data }">
-          <EmployeeDetailsPanel :employee="data" />
+          <EmployeeDetails :employee="data" />
         </template>
         <Column expander style="width: 40px" />
         <Column field="name" header="Імʼя" sortable />
         <Column field="position" header="Посада" sortable>
           <template #body="{ data }">
-            <input
-              class="cell-input"
-              type="text"
+            <CellInput
+              :value="data.position"
               placeholder="Не вказано"
-              :value="data.position || ''"
               :disabled="savingId === data.id"
-              @change="savePosition(data, $event.target.value)"
-              @keyup.enter="$event.target.blur()"
-            >
+              @commit="savePosition(data, $event)"
+            />
           </template>
         </Column>
         <Column field="email" header="Пошта" sortable />
@@ -139,12 +95,23 @@ onMounted(async () => {
               class="row-btn"
               type="button"
               :disabled="savingId === data.id"
-              @click="dismiss(data)"
+              @click="askDismiss(data)"
             >Видалити з системи</button>
           </template>
         </Column>
       </DataTable>
     </div>
+
+    <PlanConfirmDialog
+      v-model:visible="dismissVisible"
+      :title="`Видалити ${dismissing?.name ?? ''} з системи?`"
+      confirm-label="Видалити з системи"
+      :busy="savingId === dismissing?.id"
+      @confirm="confirmDismiss"
+    >
+      Доступ закриється одразу, і зайти знову не вийде — навіть поки людина лишається в Yaware.
+      Звіти, активності й Табель за минулі дні збережуться; поновити можна будь-коли.
+    </PlanConfirmDialog>
   </div>
 </template>
 
@@ -173,30 +140,6 @@ onMounted(async () => {
 
 .page-message {
   margin-top: 16px;
-}
-
-.cell-input {
-  width: 100%;
-  min-width: 140px;
-  padding: 4px 6px;
-  border: 1px solid transparent;
-  background: transparent;
-  font: inherit;
-  color: inherit;
-}
-
-.cell-input:hover:not(:disabled) {
-  border-color: var(--line);
-}
-
-.cell-input:focus {
-  outline: none;
-  border-color: var(--accent);
-  background: var(--surface);
-}
-
-.cell-input:disabled {
-  opacity: 0.6;
 }
 
 .status-dismissed {
