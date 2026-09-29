@@ -18,38 +18,25 @@ class StatsController extends Controller
             'employee_id' => ['nullable', 'integer', 'exists:employees,id'],
         ]);
 
+        $user = $request->user();
         $dateFrom = $validated['date_from'] ?? now()->startOfMonth()->toDateString();
         $dateTo = $validated['date_to'] ?? now()->toDateString();
 
-        // Порівняння по самій колонці, а не whereDate: обгортка в DATE()/strftime()
-        // вимикає індекси (employee_id, date) і змушує читати таблицю цілком.
-        $query = DailyStat::with('employee')
-            ->whereBetween('date', [$dateFrom, $dateTo])
+        $stats = DailyStat::with('employee')
+            ->betweenDates($dateFrom, $dateTo)
+            ->visibleTo($user)
+            // Фільтр по працівнику — лише для адміністратора: працівник і так бачить тільки себе.
+            ->when(
+                $user->isAdmin() && ! empty($validated['employee_id']),
+                fn ($query) => $query->where('employee_id', $validated['employee_id']),
+            )
             ->orderBy('date')
-            ->orderBy('employee_id');
-
-        if (! $request->user()->isAdmin()) {
-            $query->whereRelation('employee', 'user_id', $request->user()->id);
-        } elseif (! empty($validated['employee_id'])) {
-            $query->where('employee_id', $validated['employee_id']);
-        }
-
-        $stats = $query->get();
+            ->orderBy('employee_id')
+            ->get();
 
         return response()->json([
             'data' => $stats,
-            'totals' => [
-                'days' => $stats->count(),
-                'productive_seconds' => (int) $stats->sum('productive_seconds'),
-                'unproductive_seconds' => (int) $stats->sum('unproductive_seconds'),
-                'neutral_seconds' => (int) $stats->sum('neutral_seconds'),
-                'total_seconds' => (int) $stats->sum('total_seconds'),
-                // Робочий час: із загального віднімається непродуктивний (як у Табелі).
-                'work_seconds' => (int) $stats->sum(
-                    fn (DailyStat $stat) => max(0, (int) $stat->total_seconds - (int) $stat->unproductive_seconds),
-                ),
-                'lateness_seconds' => (int) $stats->sum('lateness_seconds'),
-            ],
+            'totals' => DailyStat::totals($stats),
             'period' => ['date_from' => $dateFrom, 'date_to' => $dateTo],
         ]);
     }
@@ -61,11 +48,12 @@ class StatsController extends Controller
             'date' => ['required', 'date_format:Y-m-d'],
         ]);
 
-        if (! $request->user()->isAdmin()) {
-            abort_unless($request->user()->employee?->id === (int) $validated['employee_id'], 403);
-        }
+        $user = $request->user();
+        $employeeId = (int) $validated['employee_id'];
 
-        $entries = ActivityEntry::where('employee_id', $validated['employee_id'])
+        abort_unless($user->isAdmin() || $user->employee?->id === $employeeId, 403);
+
+        $entries = ActivityEntry::where('employee_id', $employeeId)
             ->where('date', $validated['date'])
             ->orderByDesc('duration_seconds')
             ->get();

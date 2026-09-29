@@ -26,10 +26,7 @@ class TimesheetController extends Controller
         $start = $month->toDateString();
         $end = $month->endOfMonth()->toDateString();
 
-        // Порівняння по самій колонці, а не whereDate: обгортка в DATE()/strftime()
-        // вимикає унікальний індекс (employee_id, date) — а тут вибирається місяць
-        // по всій команді.
-        $stats = DailyStat::whereBetween('date', [$start, $end])
+        $stats = DailyStat::betweenDates($start, $end)
             ->get()
             ->groupBy('employee_id');
 
@@ -42,7 +39,7 @@ class TimesheetController extends Controller
             $days = ($stats[$employee->id] ?? collect())
                 // У табель іде лише робочий час: непродуктивний віднімається.
                 ->mapWithKeys(fn (DailyStat $stat) => [
-                    $stat->date->toDateString() => max(0, (int) $stat->total_seconds - (int) $stat->unproductive_seconds),
+                    $stat->date->toDateString() => $stat->workSeconds(),
                 ]);
 
             return [
