@@ -2,7 +2,7 @@
 
 namespace App\Console\Commands;
 
-use App\Services\PlanBitrixSync;
+use App\Services\Plans\PlanBitrixSync;
 use Illuminate\Console\Command;
 
 /**

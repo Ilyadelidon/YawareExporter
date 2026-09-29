@@ -10,7 +10,7 @@ use App\Models\PlanTask;
 use App\Models\PlanTaskDay;
 use App\Models\User;
 use App\Services\GoogleSheetsService;
-use App\Services\PlanSheetExporter;
+use App\Services\Plans\PlanSheetExporter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Queue;
@@ -122,6 +122,29 @@ class PlansTest extends TestCase
         $this->putJson("/api/plans/tasks/{$task->id}/days/2026-09-16")->assertForbidden();
         $this->putJson("/api/plans/tasks/{$task->id}/current")->assertForbidden();
         $this->deleteJson("/api/plans/tasks/{$task->id}")->assertForbidden();
+    }
+
+    public function test_member_adds_sections_only_to_own_project_and_cannot_rename_them(): void
+    {
+        $ivan = $this->employee('Іван Петренко');
+        $olena = $this->employee('Олена Коваль');
+        $mine = $this->project('TumTum', $ivan);
+        $foreign = $this->project('Brok', $olena);
+
+        Sanctum::actingAs($ivan->user);
+
+        $this->postJson("/api/plans/projects/{$mine->id}/sections", ['name' => 'Кошик'])
+            ->assertCreated()
+            ->assertJsonPath('data.position', 1);
+        $this->postJson("/api/plans/projects/{$mine->id}/sections", ['name' => 'Оплата'])
+            ->assertJsonPath('data.position', 2);
+        $this->postJson("/api/plans/projects/{$foreign->id}/sections", ['name' => 'Чуже'])->assertForbidden();
+
+        $section = $mine->sections()->first();
+
+        $this->patchJson("/api/plans/sections/{$section->id}", ['name' => 'Інше'])->assertForbidden();
+        $this->deleteJson("/api/plans/sections/{$section->id}")->assertForbidden();
+        $this->assertSame(0, $foreign->sections()->count());
     }
 
     public function test_employee_cannot_reassign_own_task(): void

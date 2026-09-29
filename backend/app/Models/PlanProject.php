@@ -54,4 +54,21 @@ class PlanProject extends Model
     {
         return $employee !== null && $this->members()->whereKey($employee->id)->exists();
     }
+
+    /** Те саме, що scopeVisibleTo, — для одного проекту. */
+    public function isVisibleTo(User $user): bool
+    {
+        return $user->isAdmin() || $this->hasMember($user->employee);
+    }
+
+    /** Нова задача стає в кінець плану. */
+    public function nextTaskPosition(): int
+    {
+        return (int) PlanTask::where('plan_project_id', $this->id)->max('position') + 1;
+    }
+
+    public function nextSectionPosition(): int
+    {
+        return (int) PlanSection::where('plan_project_id', $this->id)->max('position') + 1;
+    }
 }

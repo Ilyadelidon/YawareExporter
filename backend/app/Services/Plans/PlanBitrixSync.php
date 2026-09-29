@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Services;
+namespace App\Services\Plans;
 
 use App\Jobs\PushPlanTaskToBitrix;
 use App\Jobs\RemovePlanTagInBitrix;
@@ -10,6 +10,7 @@ use App\Models\Employee;
 use App\Models\PlanProject;
 use App\Models\PlanTask;
 use App\Models\User;
+use App\Services\BitrixService;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
@@ -32,7 +33,7 @@ use Throwable;
  */
 class PlanBitrixSync
 {
-    use SyncsPlanTasks;
+    use SyncsWithTracker;
 
     private const LOG_PREFIX = 'Плани ↔ Бітрікс24';
 
@@ -366,7 +367,7 @@ class PlanBitrixSync
                 'employee_id' => $employee->id,
                 ...$this->textAttributes($remote),
                 'status' => self::FROM_BITRIX[$remote['status']] ?? PlanTask::STATUS_PENDING,
-                'position' => $this->nextPosition($project),
+                'position' => $project->nextTaskPosition(),
                 'bitrix_task_id' => $id,
                 'bitrix_snapshot' => $remote,
             ]);

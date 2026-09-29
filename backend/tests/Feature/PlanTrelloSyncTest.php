@@ -6,7 +6,7 @@ use App\Models\Employee;
 use App\Models\PlanProject;
 use App\Models\PlanTask;
 use App\Models\User;
-use App\Services\PlanTrelloSync;
+use App\Services\Plans\PlanTrelloSync;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Carbon;

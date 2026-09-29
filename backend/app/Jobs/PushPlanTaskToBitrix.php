@@ -4,7 +4,7 @@ namespace App\Jobs;
 
 use App\Models\PlanTask;
 use App\Models\User;
-use App\Services\PlanBitrixSync;
+use App\Services\Plans\PlanBitrixSync;
 use Illuminate\Foundation\Bus\Dispatchable;
 
 /**

@@ -2,7 +2,7 @@
 
 namespace App\Console\Commands;
 
-use App\Services\PlanTrelloSync;
+use App\Services\Plans\PlanTrelloSync;
 use Illuminate\Console\Command;
 
 /**

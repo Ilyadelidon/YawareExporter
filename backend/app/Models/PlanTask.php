@@ -79,4 +79,38 @@ class PlanTask extends Model
     {
         return $this->hasMany(PlanTaskDay::class)->orderBy('date');
     }
+
+    /**
+     * Адміністратор править усе; працівник — лише власні задачі в проекті,
+     * де він досі учасник.
+     */
+    public function isEditableBy(User $user): bool
+    {
+        if ($user->isAdmin()) {
+            return true;
+        }
+
+        $employee = $user->employee;
+
+        return $employee !== null && $this->employee_id === $employee->id && $this->project->hasMember($employee);
+    }
+
+    /**
+     * Після зміни статусу чи виконавця: закрита або передана задача вже не
+     * «поточна» для попереднього виконавця.
+     */
+    public function releaseCurrent(int $previousEmployeeId): void
+    {
+        if (in_array($this->status, self::INACTIVE_STATUSES, true) || $this->employee_id !== $previousEmployeeId) {
+            $this->clearCurrentOf($previousEmployeeId);
+        }
+    }
+
+    /** Знімає «працюю зараз» з працівника, якщо поточна в нього саме ця задача. */
+    public function clearCurrentOf(int $employeeId): void
+    {
+        Employee::whereKey($employeeId)
+            ->where('current_plan_task_id', $this->id)
+            ->update(['current_plan_task_id' => null]);
+    }
 }

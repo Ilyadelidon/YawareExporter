@@ -3,15 +3,12 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\BitrixWorkspace;
 use App\Models\Employee;
 use App\Models\PlanProject;
 use App\Models\PlanTask;
 use App\Models\PlanTaskDay;
-use App\Models\User;
-use App\Services\BitrixService;
-use App\Services\PlanTrackers;
-use App\Services\PlanTrelloSync;
+use App\Services\Plans\PlanTaskPresenter;
+use App\Services\Plans\PlanTrackers;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -53,12 +50,12 @@ class PlanTaskController extends Controller
             'title' => $validated['title'],
             'note' => $validated['note'] ?? null,
             'status' => $validated['status'] ?? PlanTask::STATUS_PENDING,
-            'position' => (int) PlanTask::where('plan_project_id', $project->id)->max('position') + 1,
+            'position' => $project->nextTaskPosition(),
         ]);
 
         PlanTrackers::push($task, $user);
 
-        return response()->json(['data' => $this->payload($task)], 201);
+        return response()->json(['data' => PlanTaskPresenter::make()->present($task)], 201);
     }
 
     public function update(Request $request, PlanTask $task): JsonResponse
@@ -98,12 +95,7 @@ class PlanTaskController extends Controller
             $synced = $task->wasChanged(['title', 'note', 'status', 'employee_id']);
             $executorChanged = $task->wasChanged('employee_id');
 
-            // Закрита чи передана задача вже не «поточна» для попереднього виконавця.
-            if (in_array($task->status, PlanTask::INACTIVE_STATUSES, true) || $task->employee_id !== $previousEmployeeId) {
-                Employee::whereKey($previousEmployeeId)
-                    ->where('current_plan_task_id', $task->id)
-                    ->update(['current_plan_task_id' => null]);
-            }
+            $task->releaseCurrent($previousEmployeeId);
         });
 
         if ($executorChanged) {
@@ -112,7 +104,7 @@ class PlanTaskController extends Controller
             PlanTrackers::push($task, $user);
         }
 
-        return response()->json(['data' => $this->payload($task->fresh())]);
+        return response()->json(['data' => PlanTaskPresenter::make()->present($task->fresh())]);
     }
 
     public function destroy(Request $request, PlanTask $task): JsonResponse
@@ -181,35 +173,21 @@ class PlanTaskController extends Controller
             PlanTrackers::push($task, $request->user());
         }
 
-        return response()->json(['data' => $this->payload($task->fresh())]);
+        return response()->json(['data' => PlanTaskPresenter::make()->present($task->fresh())]);
     }
 
     public function clearCurrent(Request $request, PlanTask $task): JsonResponse
     {
         $this->authorizeEdit($request, $task);
 
-        Employee::whereKey($task->employee_id)
-            ->where('current_plan_task_id', $task->id)
-            ->update(['current_plan_task_id' => null]);
+        $task->clearCurrentOf($task->employee_id);
 
         return response()->json(['ok' => true]);
     }
 
     private function authorizeEdit(Request $request, PlanTask $task): void
     {
-        $user = $request->user();
-
-        if ($user->isAdmin()) {
-            return;
-        }
-
-        $employee = $user->employee;
-
-        abort_unless(
-            $employee !== null && $task->employee_id === $employee->id && $task->project->hasMember($employee),
-            403,
-            'Редагувати можна лише власні задачі.',
-        );
+        abort_unless($task->isEditableBy($request->user()), 403, 'Редагувати можна лише власні задачі.');
     }
 
     private function validateDate(string $date): void
@@ -219,62 +197,5 @@ class PlanTaskController extends Controller
         abort_unless($parsed && $parsed->format('Y-m-d') === $date, 422, 'Невірна дата.');
         // Таймлайн — про зроблене, а не про заплановане.
         abort_if($date > now()->toDateString(), 422, 'Не можна відмітити день, який ще не настав.');
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    private function payload(PlanTask $task): array
-    {
-        return [
-            'id' => $task->id,
-            'section_id' => $task->plan_section_id,
-            'employee_id' => $task->employee_id,
-            'title' => $task->title,
-            'note' => $task->note,
-            'status' => $task->status,
-            'position' => $task->position,
-            ...self::trackerPayload($task, BitrixWorkspace::active()?->portal_url),
-        ];
-    }
-
-    /**
-     * Звʼязок задачі з трекером для інтерфейсу: який (bitrix / trello),
-     * посилання і стан — linked / pending (ще не дійшло) / unlinked (у
-     * трекері зникла) / null. Підзадачі — з трекера, лише для перегляду.
-     *
-     * @return array{tracker: ?string, tracker_url: ?string, tracker_state: ?string, subtasks: list<array{id: string, title: string, url: ?string}>}
-     */
-    public static function trackerPayload(PlanTask $task, ?string $portalUrl): array
-    {
-        [$tracker, $url, $pending, $unlinkedAt] = match (true) {
-            $task->bitrix_task_id !== null || $task->bitrix_pending => [
-                User::TASK_PROVIDER_BITRIX,
-                $task->bitrix_task_id && $portalUrl
-                    ? BitrixService::taskLink($portalUrl, $task->bitrix_task_id, $task->bitrix_snapshot['responsible'] ?? null)
-                    : null,
-                $task->bitrix_pending,
-                $task->bitrix_unlinked_at,
-            ],
-            $task->trello_card_id !== null || $task->trello_pending => [
-                User::TASK_PROVIDER_TRELLO,
-                $task->trello_card_id ? PlanTrelloSync::cardUrl($task->trello_card_id) : null,
-                $task->trello_pending,
-                $task->trello_unlinked_at,
-            ],
-            default => [null, null, false, null],
-        };
-
-        return [
-            'tracker' => $tracker,
-            'tracker_url' => $url,
-            'tracker_state' => match (true) {
-                $unlinkedAt !== null => 'unlinked',
-                $pending => 'pending',
-                ($task->bitrix_task_id ?? $task->trello_card_id) !== null => 'linked',
-                default => null,
-            },
-            'subtasks' => $task->subtasks ?? [],
-        ];
     }
 }

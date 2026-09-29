@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Services;
+namespace App\Services\Plans;
 
 use App\Models\Employee;
 use App\Models\PlanProject;
@@ -286,13 +286,7 @@ class PlanSheetImporter
         $task->update($changes);
         $this->updated++;
 
-        // Те саме, що робить сервіс при зміні статусу чи виконавця: закрита
-        // або передана задача більше не «поточна» для попереднього виконавця.
-        if (in_array($task->status, PlanTask::INACTIVE_STATUSES, true) || $task->employee_id !== $previousEmployeeId) {
-            Employee::whereKey($previousEmployeeId)
-                ->where('current_plan_task_id', $task->id)
-                ->update(['current_plan_task_id' => null]);
-        }
+        $task->releaseCurrent($previousEmployeeId);
     }
 
     /**

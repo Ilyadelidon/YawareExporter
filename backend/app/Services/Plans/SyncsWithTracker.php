@@ -1,9 +1,7 @@
 <?php
 
-namespace App\Services;
+namespace App\Services\Plans;
 
-use App\Models\Employee;
-use App\Models\PlanProject;
 use App\Models\PlanTask;
 use Illuminate\Support\Facades\Log;
 
@@ -15,7 +13,7 @@ use Illuminate\Support\Facades\Log;
  * Клас, що використовує трейт, задає LOG_PREFIX — з нього в laravel.log
  * видно, чий це прогін.
  */
-trait SyncsPlanTasks
+trait SyncsWithTracker
 {
     /** @var array{created: int, updated: int, pushed: int, unlinked: int, warnings: list<string>} */
     private array $summary = ['created' => 0, 'updated' => 0, 'pushed' => 0, 'unlinked' => 0, 'warnings' => []];
@@ -88,11 +86,6 @@ trait SyncsPlanTasks
         return $attributes;
     }
 
-    private function nextPosition(PlanProject $project): int
-    {
-        return (int) PlanTask::where('plan_project_id', $project->id)->max('position') + 1;
-    }
-
     /**
      * Після змін із трекера: виконавцю потрібен доступ до плану проекту, а
      * закрита чи передана задача вже не «поточна» для попереднього виконавця.
@@ -101,12 +94,7 @@ trait SyncsPlanTasks
     {
         $task->unsetRelation('project');
         $task->project->members()->syncWithoutDetaching([$task->employee_id]);
-
-        if (in_array($task->status, PlanTask::INACTIVE_STATUSES, true) || $task->employee_id !== $previousEmployeeId) {
-            Employee::whereKey($previousEmployeeId)
-                ->where('current_plan_task_id', $task->id)
-                ->update(['current_plan_task_id' => null]);
-        }
+        $task->releaseCurrent($previousEmployeeId);
     }
 
     /** Підзадачі — не правка задачі плану: updated_at не чіпаємо. */

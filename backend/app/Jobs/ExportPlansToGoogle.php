@@ -3,7 +3,7 @@
 namespace App\Jobs;
 
 use App\Services\GoogleSheetsService;
-use App\Services\PlanSheetSync;
+use App\Services\Plans\PlanSheetSync;
 use App\Services\TelegramService;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;

@@ -2,7 +2,7 @@
 
 namespace App\Jobs;
 
-use App\Services\PlanTrelloSync;
+use App\Services\Plans\PlanTrelloSync;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Support\Facades\Log;
 use Throwable;

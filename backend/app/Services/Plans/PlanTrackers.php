@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Services;
+namespace App\Services\Plans;
 
 use App\Models\Employee;
 use App\Models\PlanTask;

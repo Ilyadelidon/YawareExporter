@@ -1,11 +1,12 @@
 <?php
 
-namespace App\Services;
+namespace App\Services\Plans;
 
 use App\Models\Employee;
 use App\Models\PlanProject;
 use App\Models\PlanTask;
 use App\Models\PlanTaskDay;
+use App\Services\GoogleSheetsService;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonPeriod;
 use Illuminate\Support\Collection;

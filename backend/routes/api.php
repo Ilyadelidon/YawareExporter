@@ -12,6 +12,7 @@ use App\Http\Controllers\Api\IntegrationLinkController;
 use App\Http\Controllers\Api\OpsTelegramController;
 use App\Http\Controllers\Api\PlanGoogleController;
 use App\Http\Controllers\Api\PlanProjectController;
+use App\Http\Controllers\Api\PlanSectionController;
 use App\Http\Controllers\Api\PlanTaskController;
 use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\StatsController;
@@ -87,7 +88,7 @@ Route::middleware(['auth:sanctum', 'not-dismissed'])->group(function () {
     // керування проектами — нижче, в адмінській групі.
     Route::get('/plans/projects', [PlanProjectController::class, 'index']);
     Route::get('/plans/projects/{project}', [PlanProjectController::class, 'show']);
-    Route::post('/plans/projects/{project}/sections', [PlanProjectController::class, 'storeSection']);
+    Route::post('/plans/projects/{project}/sections', [PlanSectionController::class, 'store']);
     Route::post('/plans/projects/{project}/tasks', [PlanTaskController::class, 'store']);
     Route::patch('/plans/tasks/{task}', [PlanTaskController::class, 'update']);
     Route::delete('/plans/tasks/{task}', [PlanTaskController::class, 'destroy']);
@@ -101,8 +102,8 @@ Route::middleware(['auth:sanctum', 'not-dismissed'])->group(function () {
         Route::patch('/plans/projects/{project}', [PlanProjectController::class, 'update']);
         Route::delete('/plans/projects/{project}', [PlanProjectController::class, 'destroy']);
         Route::put('/plans/projects/{project}/members', [PlanProjectController::class, 'updateMembers']);
-        Route::patch('/plans/sections/{section}', [PlanProjectController::class, 'updateSection']);
-        Route::delete('/plans/sections/{section}', [PlanProjectController::class, 'destroySection']);
+        Route::patch('/plans/sections/{section}', [PlanSectionController::class, 'update']);
+        Route::delete('/plans/sections/{section}', [PlanSectionController::class, 'destroy']);
         Route::get('/plans/google', [PlanGoogleController::class, 'show']);
         Route::put('/plans/google', [PlanGoogleController::class, 'link']);
         Route::delete('/plans/google', [PlanGoogleController::class, 'unlink']);

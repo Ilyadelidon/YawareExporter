@@ -40,7 +40,7 @@ class PlanGoogleController extends Controller
      */
     public function link(Request $request, GoogleSheetsService $sheets): JsonResponse
     {
-        abort_unless($sheets->hasGoogleAccount(), 409, 'Google-акаунт не підключено — підключіть його в налаштуваннях.');
+        $this->ensureGoogleAccount($sheets);
 
         $validated = $request->validate([
             'spreadsheet' => ['required', 'string', 'max:2048'],
@@ -89,7 +89,7 @@ class PlanGoogleController extends Controller
      */
     public function export(GoogleSheetsService $sheets): JsonResponse
     {
-        abort_unless($sheets->hasGoogleAccount(), 409, 'Google-акаунт не підключено — підключіть його в налаштуваннях.');
+        $this->ensureGoogleAccount($sheets);
 
         $spreadsheetId = AppSetting::get(AppSetting::PLANS_SPREADSHEET_ID);
 
@@ -101,5 +101,10 @@ class PlanGoogleController extends Controller
         ExportPlansToGoogle::dispatch($spreadsheetId);
 
         return response()->json(['data' => ['export' => ExportPlansToGoogle::status()]], 202);
+    }
+
+    private function ensureGoogleAccount(GoogleSheetsService $sheets): void
+    {
+        abort_unless($sheets->hasGoogleAccount(), 409, 'Google-акаунт не підключено — підключіть його в налаштуваннях.');
     }
 }

@@ -3,7 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\PlanTask;
-use App\Services\PlanTrelloSync;
+use App\Services\Plans\PlanTrelloSync;
 use Illuminate\Foundation\Bus\Dispatchable;
 
 /**

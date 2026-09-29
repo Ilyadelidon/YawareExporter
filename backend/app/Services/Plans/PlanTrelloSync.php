@@ -1,12 +1,13 @@
 <?php
 
-namespace App\Services;
+namespace App\Services\Plans;
 
 use App\Jobs\PushPlanTaskToTrello;
 use App\Jobs\RemovePlanLabelInTrello;
 use App\Models\PlanProject;
 use App\Models\PlanTask;
 use App\Models\User;
+use App\Services\TrelloService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -26,7 +27,7 @@ use Throwable;
  */
 class PlanTrelloSync
 {
-    use SyncsPlanTasks;
+    use SyncsWithTracker;
 
     private const LOG_PREFIX = 'Плани ↔ Trello';
 
@@ -341,7 +342,7 @@ class PlanTrelloSync
                 'employee_id' => $employee->id,
                 ...$this->textAttributes($remote),
                 'status' => $status,
-                'position' => $this->nextPosition($project),
+                'position' => $project->nextTaskPosition(),
                 'trello_card_id' => $cardId,
                 'trello_board_id' => $board['id'],
                 'trello_snapshot' => $remote + ['status' => $status],

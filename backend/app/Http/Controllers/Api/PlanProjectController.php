@@ -3,12 +3,11 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\BitrixWorkspace;
 use App\Models\Employee;
 use App\Models\PlanProject;
-use App\Models\PlanSection;
 use App\Models\PlanTask;
 use App\Models\PlanTaskDay;
+use App\Services\Plans\PlanTaskPresenter;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -37,49 +36,28 @@ class PlanProjectController extends Controller
      */
     public function show(Request $request, PlanProject $project): JsonResponse
     {
-        $this->authorizeView($request, $project);
+        abort_unless($project->isVisibleTo($request->user()), 403, 'Ви не учасник цього проекту.');
 
         $validated = $request->validate([
             'month' => ['nullable', 'date_format:Y-m'],
         ]);
 
         $month = CarbonImmutable::createFromFormat('Y-m', $validated['month'] ?? now()->format('Y-m'))->startOfMonth();
-        $start = $month->toDateString();
-        $end = $month->endOfMonth()->toDateString();
 
         $taskIds = $project->tasks()->pluck('id');
-
-        // Порівняння по самій колонці, а не whereDate: так працює унікальний
-        // індекс (plan_task_id, date).
-        $days = PlanTaskDay::whereIn('plan_task_id', $taskIds)
-            ->whereBetween('date', [$start, $end])
-            ->get()
-            ->groupBy('plan_task_id');
-
-        // Останній робочий день за весь час — щоб фільтр «активні» не ховав
-        // задачу лише тому, що цього місяця її не чіпали.
-        $lastWorked = PlanTaskDay::whereIn('plan_task_id', $taskIds)
-            ->groupBy('plan_task_id')
-            ->selectRaw('plan_task_id, max(date) as last_date')
-            ->pluck('last_date', 'plan_task_id');
+        $days = PlanTaskDay::forTasksInMonth($taskIds, $month)->get()->groupBy('plan_task_id');
+        $lastWorked = PlanTaskDay::lastWorkedDates($taskIds);
 
         $members = $project->members()->orderBy('name')->get(['employees.id', 'name', 'position', 'current_plan_task_id']);
 
-        $portalUrl = BitrixWorkspace::active()?->portal_url;
+        $presenter = PlanTaskPresenter::make();
 
         $tasks = $project->tasks()->get()->map(fn (PlanTask $task) => [
-            ...PlanTaskController::trackerPayload($task, $portalUrl),
-            'id' => $task->id,
-            'section_id' => $task->plan_section_id,
-            'employee_id' => $task->employee_id,
-            'title' => $task->title,
-            'note' => $task->note,
-            'status' => $task->status,
-            'position' => $task->position,
+            ...$presenter->present($task),
             'days' => (object) ($days[$task->id] ?? collect())
                 ->mapWithKeys(fn (PlanTaskDay $day) => [$day->date->toDateString() => (string) $day->comment])
                 ->all(),
-            'last_worked_on' => isset($lastWorked[$task->id]) ? substr((string) $lastWorked[$task->id], 0, 10) : null,
+            'last_worked_on' => $lastWorked[$task->id] ?? null,
         ]);
 
         $user = $request->user();
@@ -116,7 +94,7 @@ class PlanProjectController extends Controller
         $project = PlanProject::create(['name' => $validated['name']]);
         $project->members()->sync($validated['employee_ids'] ?? []);
 
-        return response()->json(['data' => $this->projectSummary($project->load('members:id,name')->loadCount('tasks'))], 201);
+        return response()->json(['data' => $this->freshSummary($project)], 201);
     }
 
     public function update(Request $request, PlanProject $project): JsonResponse
@@ -136,7 +114,7 @@ class PlanProjectController extends Controller
 
         $project->save();
 
-        return response()->json(['data' => $this->projectSummary($project->load('members:id,name')->loadCount('tasks'))]);
+        return response()->json(['data' => $this->freshSummary($project)]);
     }
 
     public function destroy(PlanProject $project): JsonResponse
@@ -155,55 +133,15 @@ class PlanProjectController extends Controller
 
         $project->members()->sync($validated['employee_ids']);
 
-        return response()->json(['data' => $this->projectSummary($project->load('members:id,name')->loadCount('tasks'))]);
+        return response()->json(['data' => $this->freshSummary($project)]);
     }
 
     /**
-     * Розділ може додати будь-який учасник — працівник сам розкладає свій
-     * план. Перейменовує й видаляє лише адміністратор.
+     * @return array<string, mixed>
      */
-    public function storeSection(Request $request, PlanProject $project): JsonResponse
+    private function freshSummary(PlanProject $project): array
     {
-        $this->authorizeView($request, $project);
-
-        $validated = $request->validate([
-            'name' => ['required', 'string', 'max:255'],
-            'note' => ['nullable', 'string', 'max:2000'],
-        ]);
-
-        $section = $project->sections()->create([
-            'name' => $validated['name'],
-            'note' => $validated['note'] ?? null,
-            'position' => (int) PlanSection::where('plan_project_id', $project->id)->max('position') + 1,
-        ]);
-
-        return response()->json(['data' => $section->only(['id', 'name', 'note', 'position'])], 201);
-    }
-
-    public function updateSection(Request $request, PlanSection $section): JsonResponse
-    {
-        $validated = $request->validate([
-            'name' => ['sometimes', 'string', 'max:255'],
-            'note' => ['nullable', 'string', 'max:2000'],
-        ]);
-
-        $section->update($validated);
-
-        return response()->json(['data' => $section->only(['id', 'name', 'note', 'position'])]);
-    }
-
-    public function destroySection(PlanSection $section): JsonResponse
-    {
-        $section->delete();
-
-        return response()->json(['ok' => true]);
-    }
-
-    private function authorizeView(Request $request, PlanProject $project): void
-    {
-        $user = $request->user();
-
-        abort_unless($user->isAdmin() || $project->hasMember($user->employee), 403, 'Ви не учасник цього проекту.');
+        return $this->projectSummary($project->load('members:id,name')->loadCount('tasks'));
     }
 
     /**
