@@ -205,6 +205,9 @@ class EmployeeMemoryTest extends TestCase
 
         $this->patchJson("/api/employees/{$employee->id}/memory/{$memory->id}", ['verdict' => 'work_related'])
             ->assertNotFound();
+        $this->deleteJson("/api/employees/{$employee->id}/memory/{$memory->id}")->assertNotFound();
+
+        $this->assertSame('personal', $memory->fresh()->verdict);
     }
 
     public function test_admin_adds_fact(): void

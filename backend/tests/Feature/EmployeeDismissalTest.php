@@ -73,6 +73,19 @@ class EmployeeDismissalTest extends TestCase
         $this->assertDatabaseHas('reports', ['id' => $report->id]);
     }
 
+    public function test_repeated_dismissal_keeps_the_first_date(): void
+    {
+        $employee = $this->employee();
+        Sanctum::actingAs($this->admin());
+
+        $this->travelTo('2026-09-01 10:00:00');
+        $this->postJson("/api/employees/{$employee->id}/dismissal")->assertOk();
+        $this->travelTo('2026-09-15 10:00:00');
+        $this->postJson("/api/employees/{$employee->id}/dismissal")->assertOk();
+
+        $this->assertSame('2026-09-01', $employee->fresh()->dismissed_at->toDateString());
+    }
+
     public function test_dismissed_employee_cannot_log_in_with_local_password(): void
     {
         Queue::fake();

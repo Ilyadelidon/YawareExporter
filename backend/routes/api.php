@@ -142,9 +142,12 @@ Route::middleware(['auth:sanctum', 'not-dismissed'])->group(function () {
         Route::delete('/employees/{employee}/dismissal', [EmployeeController::class, 'reinstate']);
 
         // Пам'ять AI по працівнику: вердикти, які модель більше не перешукує.
-        Route::get('/employees/{employee}/memory', [EmployeeMemoryController::class, 'index']);
-        Route::post('/employees/{employee}/memory', [EmployeeMemoryController::class, 'store']);
-        Route::patch('/employees/{employee}/memory/{memory}', [EmployeeMemoryController::class, 'update']);
-        Route::delete('/employees/{employee}/memory/{memory}', [EmployeeMemoryController::class, 'destroy']);
+        // scopeBindings: рядок чужого працівника за цією адресою — 404.
+        Route::scopeBindings()->group(function () {
+            Route::get('/employees/{employee}/memory', [EmployeeMemoryController::class, 'index']);
+            Route::post('/employees/{employee}/memory', [EmployeeMemoryController::class, 'store']);
+            Route::patch('/employees/{employee}/memory/{memory}', [EmployeeMemoryController::class, 'update']);
+            Route::delete('/employees/{employee}/memory/{memory}', [EmployeeMemoryController::class, 'destroy']);
+        });
     });
 });

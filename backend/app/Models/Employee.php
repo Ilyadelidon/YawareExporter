@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\DB;
 
 #[Fillable(['user_id', 'name', 'position', 'email', 'yaware_id', 'yaware_password', 'active', 'dismissed_at', 'current_plan_task_id'])]
 #[Hidden(['yaware_password'])]
@@ -38,16 +39,21 @@ class Employee extends Model
      * Історію (звіти, Табель, активності) навмисно не чіпаємо — вона потрібна
      * і після звільнення. Пароль Yaware стираємо: тримати чужі креди після
      * звільнення немає навіщо, а без них не згенерується й звіт.
+     *
+     * Повторне звільнення дату не зсуває: вона лишається днем, коли двері
+     * зачинили вперше.
      */
     public function dismiss(): void
     {
-        $this->user?->tokens()->delete();
+        DB::transaction(function () {
+            $this->user?->tokens()->delete();
 
-        $this->update([
-            'active' => false,
-            'dismissed_at' => now(),
-            'yaware_password' => null,
-        ]);
+            $this->update([
+                'active' => false,
+                'dismissed_at' => $this->dismissed_at ?? now(),
+                'yaware_password' => null,
+            ]);
+        });
     }
 
     /**
@@ -67,5 +73,10 @@ class Employee extends Model
     public function reports(): HasMany
     {
         return $this->hasMany(Report::class);
+    }
+
+    public function memories(): HasMany
+    {
+        return $this->hasMany(EmployeeMemory::class);
     }
 }

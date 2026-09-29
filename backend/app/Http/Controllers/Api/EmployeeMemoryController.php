@@ -18,7 +18,7 @@ class EmployeeMemoryController extends Controller
 {
     public function index(Employee $employee): JsonResponse
     {
-        $rows = EmployeeMemory::where('employee_id', $employee->id)
+        $rows = $employee->memories()
             ->orderByDesc('occurrences')
             ->orderBy('name')
             ->get();
@@ -45,9 +45,8 @@ class EmployeeMemoryController extends Controller
             'note' => ['nullable', 'string', 'max:500'],
         ]);
 
-        $memory = EmployeeMemory::updateOrCreate(
+        $memory = $employee->memories()->updateOrCreate(
             [
-                'employee_id' => $employee->id,
                 'kind' => $validated['kind'],
                 'name' => $validated['name'],
             ],
@@ -62,10 +61,12 @@ class EmployeeMemoryController extends Controller
         return response()->json(['data' => $memory], 201);
     }
 
+    /**
+     * Що рядок належить саме цьому працівникові, перевіряє scopeBindings у
+     * маршрутах: чужий рядок за цією адресою — 404.
+     */
     public function update(Request $request, Employee $employee, EmployeeMemory $memory): JsonResponse
     {
-        $this->assertBelongsTo($employee, $memory);
-
         $validated = $request->validate([
             'verdict' => ['nullable', Rule::in(EmployeeMemory::VERDICTS)],
             'note' => ['nullable', 'string', 'max:500'],
@@ -83,15 +84,8 @@ class EmployeeMemoryController extends Controller
 
     public function destroy(Employee $employee, EmployeeMemory $memory): JsonResponse
     {
-        $this->assertBelongsTo($employee, $memory);
-
         $memory->delete();
 
         return response()->json(null, 204);
-    }
-
-    private function assertBelongsTo(Employee $employee, EmployeeMemory $memory): void
-    {
-        abort_unless($memory->employee_id === $employee->id, 404);
     }
 }
