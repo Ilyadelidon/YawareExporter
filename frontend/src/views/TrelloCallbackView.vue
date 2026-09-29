@@ -1,6 +1,7 @@
 <script setup>
 import { onMounted, ref } from 'vue';
 import client from '../api/client';
+import { TRELLO_CONNECTED_MESSAGE } from '../constants/trackers';
 
 // Trello повертає токен у fragment (#token=...), який не доходить до сервера,
 // тому ця сторінка (відкрита в popup) зчитує його і передає на бекенд POST-ом.
@@ -26,7 +27,7 @@ onMounted(async () => {
     const { data } = await client.post('/trello/token', { token });
     state.value = 'success';
     message.value = `Trello підключено як @${data.username}. Цю вкладку можна закрити.`;
-    window.opener?.postMessage({ type: 'trello-connected', username: data.username }, window.location.origin);
+    window.opener?.postMessage({ type: TRELLO_CONNECTED_MESSAGE, username: data.username }, window.location.origin);
     window.close();
   } catch (error) {
     state.value = 'error';

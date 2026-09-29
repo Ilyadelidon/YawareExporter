@@ -2,7 +2,13 @@
 // Персональні інтеграції працівника: таск-трекер (Trello або Бітрікс24),
 // Google Таблиця для звітів і Telegram-сповіщення. Командні налаштування —
 // у «Налаштуваннях» адміністратора.
-import IntegrationsStrip from '../components/IntegrationsStrip.vue';
+import GoogleSheetRow from '../components/integrations/GoogleSheetRow.vue';
+import TelegramRow from '../components/integrations/TelegramRow.vue';
+import TrackerSection from '../components/integrations/TrackerSection.vue';
+import { provideIntegrationFeedback } from '../composables/integrations/useIntegrationFeedback';
+import '../styles/integrations-ui.css';
+
+provideIntegrationFeedback();
 </script>
 
 <template>
@@ -19,13 +25,38 @@ import IntegrationsStrip from '../components/IntegrationsStrip.vue';
       </div>
     </div>
 
-    <IntegrationsStrip />
+    <div class="integrations int-ui">
+      <TrackerSection />
+
+      <section class="int-section" aria-labelledby="sec-delivery">
+        <header class="section-head">
+          <div>
+            <h2 id="sec-delivery" class="section-title">Звіти та сповіщення</h2>
+            <p class="section-desc">Куди потрапляє готовий звіт і як про нього дізнатися.</p>
+          </div>
+        </header>
+
+        <div class="panel int-list">
+          <GoogleSheetRow />
+          <TelegramRow />
+        </div>
+      </section>
+    </div>
   </div>
 </template>
 
 <style scoped>
+/* Кнопки, поля, секції й небезпечна дія — у styles/integrations-ui.css. */
 .integrations-page {
   display: flex;
   flex-direction: column;
+}
+
+.integrations {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  margin-top: 16px;
+  animation: fadeUp 0.35s ease both;
 }
 </style>

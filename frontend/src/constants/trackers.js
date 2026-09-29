@@ -8,6 +8,10 @@ export function trackerLabel(provider) {
   return TRACKER_LABELS[provider] || TRACKER_LABELS.trello;
 }
 
+// postMessage, яким popup авторизації Trello (/trello/callback) повідомляє
+// сторінку інтеграцій, що токен збережено.
+export const TRELLO_CONNECTED_MESSAGE = 'trello-connected';
+
 // Трекер, з яким звʼязана задача плану, — підписи для посилання й стану.
 export const PLAN_TRACKERS = {
   bitrix: {

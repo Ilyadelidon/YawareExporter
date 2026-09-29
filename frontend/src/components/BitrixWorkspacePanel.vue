@@ -1,7 +1,11 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue';
 import client from '../api/client';
-import IntegrationRow from './IntegrationRow.vue';
+import { errorMessage } from '../utils/errors';
+import DangerConfirm from './integrations/DangerConfirm.vue';
+import IntegrationIcon from './integrations/IntegrationIcon.vue';
+import IntegrationRow from './integrations/IntegrationRow.vue';
+import ManageToggle from './integrations/ManageToggle.vue';
 import '../styles/integrations-ui.css';
 
 // Робоча область Бітрікс24 одна на команду, тому підключає її адміністратор:
@@ -10,7 +14,6 @@ import '../styles/integrations-ui.css';
 const loading = ref(true);
 const status = ref(null);
 const open = ref(false);
-const confirming = ref(false);
 const portalUrl = ref('');
 const clientId = ref('');
 const clientSecret = ref('');
@@ -20,15 +23,13 @@ const copied = ref(false);
 // { tone: 'ok' | 'error', text } — показується під рядком порталу
 const notice = ref(null);
 
-const connected = computed(() => Boolean(status.value?.workspace_connected));
+const connected = computed(() => Boolean(status.value?.connected));
 
 // Той самий redirect_uri треба вказати в налаштуваннях застосунку на порталі —
 // Бітрікс звіряє його побайтово, тож адресу дає бекенд, а не фронтенд.
 const redirectUri = computed(() => status.value?.redirect_uri || '');
 
-const portalLabel = computed(
-  () => status.value?.portal_url?.replace(/^https:\/\//, '').replace(/\/$/, '') || '',
-);
+const portalLabel = computed(() => status.value?.portal_host || '');
 
 const rowStatus = computed(() => (connected.value
   ? { tone: 'ok', label: 'Підключено' }
@@ -46,16 +47,15 @@ const canSubmit = computed(() => Boolean(
 ));
 
 function toggle() {
-  confirming.value = false;
   open.value = !open.value;
 }
 
 async function loadStatus() {
   try {
-    const { data } = await client.get('/bitrix/status');
+    const { data } = await client.get('/bitrix/workspace');
     status.value = data;
   } catch (error) {
-    notice.value = { tone: 'error', text: error.response?.data?.message || 'Не вдалося отримати стан Бітрікс24.' };
+    notice.value = { tone: 'error', text: errorMessage(error, 'Не вдалося отримати стан Бітрікс24.') };
   } finally {
     loading.value = false;
   }
@@ -78,9 +78,7 @@ async function connect() {
   } catch (error) {
     notice.value = {
       tone: 'error',
-      text: error.response?.data?.message
-        || Object.values(error.response?.data?.errors || {})[0]?.[0]
-        || 'Не вдалося підключити портал.',
+      text: errorMessage(error, 'Не вдалося підключити портал.'),
     };
   } finally {
     saving.value = false;
@@ -93,11 +91,10 @@ async function disconnect() {
   try {
     const { data } = await client.delete('/bitrix/workspace');
     open.value = false;
-    confirming.value = false;
     notice.value = { tone: 'ok', text: data.message };
     await loadStatus();
   } catch (error) {
-    notice.value = { tone: 'error', text: error.response?.data?.message || 'Не вдалося відключити портал.' };
+    notice.value = { tone: 'error', text: errorMessage(error, 'Не вдалося відключити портал.') };
   } finally {
     disconnecting.value = false;
   }
@@ -140,22 +137,12 @@ onMounted(loadStatus);
         :open="open"
         :notice="notice"
       >
-        <template #icon>
-          <svg width="18" height="18" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" fill="#1B65A6"></rect><circle cx="12" cy="12" r="6.2" fill="none" stroke="#ffffff" stroke-width="2.4"></circle><circle cx="12" cy="12" r="2" fill="#ffffff"></circle></svg>
-        </template>
+        <template #icon><IntegrationIcon name="bitrix" /></template>
 
         <template #action>
-          <button
-            type="button"
-            class="btn"
-            :class="connected ? 'btn-secondary' : 'btn-primary'"
-            :aria-expanded="open"
-            aria-controls="int-panel-bitrix-workspace"
-            @click="toggle"
-          >
+          <ManageToggle target="bitrix-workspace" :primary="!connected" :expanded="open" @toggle="toggle">
             {{ connected ? 'Налаштування' : 'Підключити' }}
-            <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
-          </button>
+          </ManageToggle>
         </template>
 
         <!-- Портал підключено -->
@@ -183,23 +170,12 @@ onMounted(loadStatus);
             </div>
           </div>
 
-          <div class="danger">
-            <template v-if="!confirming">
-              <button type="button" class="btn btn-danger-ghost" @click="confirming = true">Відключити портал</button>
-              <span class="danger-text">Щоб замінити реквізити застосунку, відключіть портал і підключіть заново.</span>
-            </template>
-            <template v-else>
-              <span class="danger-text">
-                Токени всіх працівників буде видалено, і їхні звіти перестануть отримувати таски з Бітрікса.
-              </span>
-              <div class="danger-actions">
-                <button type="button" class="btn btn-secondary" :disabled="disconnecting" @click="confirming = false">Скасувати</button>
-                <button type="button" class="btn btn-danger" :disabled="disconnecting" @click="disconnect">
-                  {{ disconnecting ? 'Відключаємо…' : 'Так, відключити' }}
-                </button>
-              </div>
-            </template>
-          </div>
+          <DangerConfirm
+            action="Відключити портал"
+            warning="Токени всіх працівників буде видалено, і їхні звіти перестануть отримувати таски з Бітрікса."
+            :busy="disconnecting"
+            @confirm="disconnect"
+          >Щоб замінити реквізити застосунку, відключіть портал і підключіть заново.</DangerConfirm>
         </template>
 
         <!-- Портал ще не підключено: спершу застосунок на порталі, потім реквізити -->

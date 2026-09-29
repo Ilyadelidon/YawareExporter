@@ -1,7 +1,8 @@
 <script setup>
 import { computed, nextTick, onMounted, ref } from 'vue';
 import client from '../api/client';
-import IntegrationRow from './IntegrationRow.vue';
+import IntegrationRow from './integrations/IntegrationRow.vue';
+import ManageToggle from './integrations/ManageToggle.vue';
 import '../styles/integrations-ui.css';
 
 // Пошти, на які керівнику йдуть листи про критичні порушення з AI-розбору дня.
@@ -180,17 +181,9 @@ onMounted(loadStatus);
         </template>
 
         <template #action>
-          <button
-            type="button"
-            class="btn"
-            :class="active ? 'btn-secondary' : 'btn-primary'"
-            :aria-expanded="open"
-            aria-controls="int-panel-alert-emails"
-            @click="toggle"
-          >
+          <ManageToggle target="alert-emails" :primary="!active" :expanded="open" @toggle="toggle">
             {{ active ? 'Налаштування' : 'Додати пошту' }}
-            <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
-          </button>
+          </ManageToggle>
         </template>
 
         <div class="fields">

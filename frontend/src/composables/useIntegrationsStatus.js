@@ -16,22 +16,18 @@ export function useIntegrationsStatus() {
   const ready = computed(() => auth.isAdmin || (status.value.loaded && status.value.tracker && status.value.sheets));
 
   async function load() {
-    const provider = auth.user?.task_provider || 'trello';
     try {
-      const [tracker, google] = await Promise.all([
-        client.get(provider === 'bitrix' ? '/bitrix/status' : '/trello/status'),
-        client.get('/google/status'),
-      ]);
+      const { data } = await client.get('/integrations/status');
       status.value = {
         loaded: true,
-        tracker: Boolean(tracker.data.connected),
-        sheets: Boolean(google.data.account_connected && google.data.spreadsheet_id),
-        provider,
+        tracker: data.tracker.connected,
+        sheets: data.sheets.connected,
+        provider: data.tracker.provider,
       };
     } catch {
       // Стан не отримали — кнопку не блокуємо, бекенд однаково перевірить інтеграції
       // перед генерацією і поверне зрозумілу помилку.
-      status.value = { loaded: true, tracker: true, sheets: true, provider };
+      status.value = { loaded: true, tracker: true, sheets: true, provider: auth.user?.task_provider || 'trello' };
     }
   }
 

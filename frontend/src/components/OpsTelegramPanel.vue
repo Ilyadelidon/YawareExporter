@@ -1,7 +1,9 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import client from '../api/client';
-import IntegrationRow from './IntegrationRow.vue';
+import IntegrationIcon from './integrations/IntegrationIcon.vue';
+import IntegrationRow from './integrations/IntegrationRow.vue';
+import ManageToggle from './integrations/ManageToggle.vue';
 import '../styles/integrations-ui.css';
 
 // Технічний Telegram адміністратора: підсумок ранкового прогону і тривоги
@@ -206,22 +208,10 @@ onUnmounted(() => clearTimeout(pollTimer));
         :open="open && (connected || linking)"
         :notice="notice"
       >
-        <template #icon>
-          <svg width="18" height="18" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="#229ED9"></circle><path d="M6.2 11.6l9.8-3.9c.5-.2.9.1.7.9l-1.6 7.8c-.1.6-.5.7-1 .4l-2.5-1.9-1.2 1.2c-.2.2-.4.3-.7.3l.2-2.6 4.8-4.4c.2-.2 0-.3-.3-.1l-6 3.8-2.5-.8c-.6-.2-.6-.6.3-.7z" fill="#ffffff"></path></svg>
-        </template>
+        <template #icon><IntegrationIcon name="telegram" /></template>
 
         <template #action>
-          <button
-            v-if="connected"
-            type="button"
-            class="btn btn-secondary"
-            :aria-expanded="open"
-            aria-controls="int-panel-ops-telegram"
-            @click="toggle"
-          >
-            Налаштування
-            <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
-          </button>
+          <ManageToggle v-if="connected" target="ops-telegram" :expanded="open" @toggle="toggle" />
           <button
             v-else-if="configured"
             type="button"
