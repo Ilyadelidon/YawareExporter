@@ -8,7 +8,7 @@ use App\Models\PlanProject;
 use App\Models\PlanTask;
 use App\Models\PlanTaskDay;
 use App\Services\Plans\PlanTaskPresenter;
-use Carbon\CarbonImmutable;
+use App\Support\Month;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -42,7 +42,7 @@ class PlanProjectController extends Controller
             'month' => ['nullable', 'date_format:Y-m'],
         ]);
 
-        $month = CarbonImmutable::createFromFormat('Y-m', $validated['month'] ?? now()->format('Y-m'))->startOfMonth();
+        $month = Month::parse($validated['month'] ?? null);
 
         $taskIds = $project->tasks()->pluck('id');
         $days = PlanTaskDay::forTasksInMonth($taskIds, $month)->get()->groupBy('plan_task_id');

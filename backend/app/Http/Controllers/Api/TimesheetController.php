@@ -3,60 +3,28 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\DailyStat;
-use App\Models\Employee;
-use Carbon\CarbonImmutable;
+use App\Services\Timesheet;
+use App\Support\Month;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class TimesheetController extends Controller
 {
     /**
-     * Табель за місяць: матриця «працівник × дні» з робочим часом
-     * (без непродуктивного) із daily_stats. Показуються активні працівники плюс ті, у кого
-     * є дані за місяць (навіть якщо їх уже деактивували).
+     * Табель за місяць (лише адміністратор): робочий час кожного працівника по днях.
      */
-    public function index(Request $request): JsonResponse
+    public function index(Request $request, Timesheet $timesheet): JsonResponse
     {
         $validated = $request->validate([
             'month' => ['nullable', 'date_format:Y-m'],
         ]);
 
-        $month = CarbonImmutable::createFromFormat('Y-m', $validated['month'] ?? now()->format('Y-m'))->startOfMonth();
-        $start = $month->toDateString();
-        $end = $month->endOfMonth()->toDateString();
-
-        $stats = DailyStat::betweenDates($start, $end)
-            ->get()
-            ->groupBy('employee_id');
-
-        $employees = Employee::orderBy('name')
-            ->where('active', true)
-            ->orWhereIn('id', $stats->keys())
-            ->get();
-
-        $rows = $employees->map(function (Employee $employee) use ($stats) {
-            $days = ($stats[$employee->id] ?? collect())
-                // У табель іде лише робочий час: непродуктивний віднімається.
-                ->mapWithKeys(fn (DailyStat $stat) => [
-                    $stat->date->toDateString() => $stat->workSeconds(),
-                ]);
-
-            return [
-                'id' => $employee->id,
-                'name' => $employee->name,
-                'days' => (object) $days->all(),
-                'total_seconds' => (int) $days->sum(),
-                // Нульові дні (записані до того, як порожні дні перестали
-                // потрапляти в історію) не рахуються відпрацьованими.
-                'days_worked' => $days->filter(fn (int $seconds) => $seconds > 0)->count(),
-            ];
-        });
+        $month = Month::parse($validated['month'] ?? null);
 
         return response()->json([
             'month' => $month->format('Y-m'),
             'days_in_month' => $month->daysInMonth,
-            'data' => $rows->values(),
+            'data' => $timesheet->rows($month),
         ]);
     }
 }

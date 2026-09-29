@@ -199,6 +199,20 @@ class PlansTest extends TestCase
         $this->assertSame(0, PlanTaskDay::count());
     }
 
+    public function test_short_month_is_not_shifted_by_todays_day(): void
+    {
+        // 30 числа «2026-02» без обнулення дня перетворювалось на 2 березня.
+        Carbon::setTestNow('2026-09-30 12:00:00');
+        $project = $this->project('TumTum');
+
+        Sanctum::actingAs($this->admin());
+
+        $this->getJson("/api/plans/projects/{$project->id}?month=2026-02")
+            ->assertOk()
+            ->assertJsonPath('month', '2026-02')
+            ->assertJsonPath('days_in_month', 28);
+    }
+
     public function test_current_task_is_one_per_person_and_marks_today(): void
     {
         $ivan = $this->employee('Іван Петренко');
