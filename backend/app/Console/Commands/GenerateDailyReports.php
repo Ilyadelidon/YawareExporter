@@ -2,7 +2,6 @@
 
 namespace App\Console\Commands;
 
-use App\Jobs\GenerateYawareReport;
 use App\Models\Employee;
 use App\Models\Report;
 use App\Services\GoogleSheetsService;
@@ -62,10 +61,8 @@ class GenerateDailyReports extends Command
             }
 
             // Failed-звіт перезапускаємо: наступного ранку причина (Yaware/мережа)
-            // могла зникнути; повторна генерація ідемпотентна.
-            $report->update(['status' => Report::STATUS_PENDING, 'error_message' => null]);
-
-            GenerateYawareReport::dispatch($report);
+            // могла зникнути.
+            $report->queueGeneration();
             $this->line("{$employee->name} (#{$employee->id}): звіт #{$report->id} поставлено в чергу.");
             $queued++;
         }

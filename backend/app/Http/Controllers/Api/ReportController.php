@@ -3,7 +3,6 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Jobs\GenerateYawareReport;
 use App\Models\Report;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -13,11 +12,10 @@ class ReportController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
-        $query = Report::with('employee')->withCount('files')->latest('report_date');
-
-        if (! $request->user()->isAdmin()) {
-            $query->whereRelation('employee', 'user_id', $request->user()->id);
-        }
+        $query = Report::with('employee')
+            ->withCount('files')
+            ->visibleTo($request->user())
+            ->latest('report_date');
 
         if ($request->filled('employee_id') && $request->user()->isAdmin()) {
             $query->where('employee_id', $request->integer('employee_id'));
@@ -40,7 +38,7 @@ class ReportController extends Controller
 
     public function show(Request $request, Report $report): JsonResponse
     {
-        $this->authorizeAccess($request, $report);
+        abort_unless($report->isVisibleTo($request->user()), 403);
 
         return response()->json([
             'data' => $report->load(['employee', 'files']),
@@ -80,39 +78,23 @@ class ReportController extends Controller
             ], 409);
         }
 
-        $report->update([
-            'status' => Report::STATUS_PENDING,
-            'error_message' => null,
-        ]);
-
-        GenerateYawareReport::dispatch($report);
+        $report->queueGeneration();
 
         return response()->json(['data' => $report->load('employee')], 201);
     }
 
     public function download(Request $request, Report $report): BinaryFileResponse
     {
-        $this->authorizeAccess($request, $report);
+        abort_unless($report->isVisibleTo($request->user()), 403);
+        abort_unless($report->files()->exists(), 404, 'Файл звіту ще не згенеровано.');
 
-        $file = $report->files()->latest('id')->first();
-        abort_unless($file, 404, 'Файл звіту ще не згенеровано.');
-
-        $absolutePath = storage_path('app/'.$file->path);
+        $file = $report->excelFile();
         abort_unless(
-            is_file($absolutePath),
+            $file,
             404,
             'Файлу звіту вже немає на диску: файли старші за '.config('yaware.report_files_retention_days').' дн. видаляються. Перегенеруйте звіт, щоб отримати файл.',
         );
 
-        return response()->download($absolutePath, $file->original_name);
-    }
-
-    private function authorizeAccess(Request $request, Report $report): void
-    {
-        if ($request->user()->isAdmin()) {
-            return;
-        }
-
-        abort_unless($report->employee?->user_id === $request->user()->id, 403);
+        return response()->download($file->absolutePath(), $file->original_name);
     }
 }

@@ -31,20 +31,9 @@ class ReportSheetPublisher
      */
     public static function uploadFailed(Report $report): bool
     {
-        $warnings = ($report->summary ?? [])['Попередження'] ?? '';
+        $warnings = ($report->summary ?? [])[Report::SUMMARY_WARNINGS] ?? '';
 
         return is_string($warnings) && str_contains($warnings, self::FAILED_MARKER);
-    }
-
-    /**
-     * День без жодної таски в трекері. Знімок тасок звіту: порожній масив —
-     * трекер відповів і тасок немає; null — тасок не отримано (трекер не
-     * підключено або помилка), і такий день порожнім не вважається, бо його
-     * стан невідомий.
-     */
-    public static function hasNoTasks(Report $report): bool
-    {
-        return $report->tasks === [];
     }
 
     /**
@@ -59,7 +48,7 @@ class ReportSheetPublisher
         // звіту при цьому нікуди не дівається.
         // Формулювання навмисно без FAILED_MARKER: це свідомий пропуск, а не
         // помилка вивантаження, і монітор не має бачити в ньому інцидент.
-        if (self::hasNoTasks($report)) {
+        if ($report->hasNoTasks()) {
             return [null, ['тасок за день немає — денну вкладку в Google Таблицю не додано.']];
         }
 

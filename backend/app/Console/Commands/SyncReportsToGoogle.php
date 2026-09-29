@@ -3,7 +3,6 @@
 namespace App\Console\Commands;
 
 use App\Models\Report;
-use App\Models\ReportFile;
 use App\Services\ReportSheetPublisher;
 use Carbon\CarbonImmutable;
 use Illuminate\Console\Command;
@@ -39,22 +38,22 @@ class SyncReportsToGoogle extends Command
 
             // Явно вказаний день без тасок: вивантажувати нема чого, і це не
             // помилка — інакше команда завершувалась би невдачею на пропуску.
-            if (ReportSheetPublisher::hasNoTasks($report)) {
+            if ($report->hasNoTasks()) {
                 $this->info("{$label}: тасок за день немає — вивантаження не потрібне.");
 
                 continue;
             }
 
-            $excelPath = $this->excelPath($report);
+            $excelFile = $report->excelFile();
 
-            if (! $excelPath) {
+            if (! $excelFile) {
                 $this->error("{$label}: Excel-файл звіту не знайдено — потрібна повна перегенерація.");
                 $failed++;
 
                 continue;
             }
 
-            [$url, $warnings] = $publisher->publish($report, $excelPath);
+            [$url, $warnings] = $publisher->publish($report, $excelFile->absolutePath());
 
             foreach ($warnings as $warning) {
                 $this->warn("{$label}: {$warning}");
@@ -94,18 +93,6 @@ class SyncReportsToGoogle extends Command
             ->values();
     }
 
-    private function excelPath(Report $report): ?string
-    {
-        $file = $report->files()
-            ->where('type', 'combined_excel')
-            ->latest('id')
-            ->first();
-
-        $path = $file instanceof ReportFile ? storage_path('app/'.$file->path) : null;
-
-        return $path && is_file($path) ? $path : null;
-    }
-
     /**
      * Прибирає з підсумку звіту попередження про невдале вивантаження і
      * ставить посилання на вкладку — щоб у картці звіту не лишалось згадки
@@ -117,19 +104,19 @@ class SyncReportsToGoogle extends Command
     {
         $summary = $report->summary ?? [];
 
-        $kept = collect(explode("\n", $this->withoutFailureWarning((string) ($summary['Попередження'] ?? ''))))
+        $kept = collect(explode("\n", $this->withoutFailureWarning((string) ($summary[Report::SUMMARY_WARNINGS] ?? ''))))
             ->merge($warnings)
             ->map(fn (string $line) => trim($line))
             ->filter()
             ->unique()
             ->all();
 
-        $summary['Google Таблиця'] = $url;
+        $summary[Report::SUMMARY_GOOGLE_SHEET] = $url;
 
         if ($kept === []) {
-            unset($summary['Попередження']);
+            unset($summary[Report::SUMMARY_WARNINGS]);
         } else {
-            $summary['Попередження'] = implode("\n", $kept);
+            $summary[Report::SUMMARY_WARNINGS] = implode("\n", $kept);
         }
 
         $report->update(['summary' => $summary]);

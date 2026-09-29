@@ -6,15 +6,14 @@ use App\Models\Report;
 use App\Models\ReportFile;
 use App\Services\AiAnalysisService;
 use App\Services\ReportHistoryService;
+use App\Services\Reports\ReportNotifier;
+use App\Services\Reports\YawareWorker;
+use App\Services\Reports\YawareWorkerException;
 use App\Services\ReportSheetPublisher;
 use App\Services\Tasks\TaskProviders;
-use App\Services\TelegramService;
-use App\Support\WorkerEnvironment;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
-use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
-use Symfony\Component\Process\Process;
 use Throwable;
 
 class GenerateYawareReport implements ShouldQueue
@@ -32,13 +31,6 @@ class GenerateYawareReport implements ShouldQueue
     // ранкової черги тим часом іде далі.
     public const RETRY_DELAY_SECONDS = 600;
 
-    // Коди воркера, за яких повтор дасть той самий результат.
-    private const PERMANENT_WORKER_ERRORS = [
-        'INVALID_CREDENTIALS',
-        'REPORTS_PAGE_UNAVAILABLE',
-        'EMPTY_DAY',
-    ];
-
     public function __construct(public Report $report) {}
 
     public function handle(): void
@@ -52,11 +44,7 @@ class GenerateYawareReport implements ShouldQueue
         // Звіт генерується лише кредами самого працівника — сервісного акаунта
         // немає, щоб дані різних користувачів не змішувались через один логін.
         if (! $report->employee->yaware_password) {
-            $report->update([
-                'status' => Report::STATUS_FAILED,
-                'error_message' => 'Немає збережених кредів Yaware для цього працівника — він має хоча б раз увійти в сервіс своїми email і паролем Yaware.',
-            ]);
-            $this->notifyFailure($report);
+            $this->markFailed($report, 'Немає збережених кредів Yaware для цього працівника — він має хоча б раз увійти в сервіс своїми email і паролем Yaware.');
 
             return;
         }
@@ -66,58 +54,12 @@ class GenerateYawareReport implements ShouldQueue
             'error_message' => null,
         ]);
 
-        $outputDirectory = storage_path("app/reports/{$report->id}");
-        File::ensureDirectoryExists($outputDirectory);
-
-        $loginEmail = $report->employee->email;
-        $loginPassword = $report->employee->yaware_password;
-
         [$tasks, $tasksWarning] = $this->fetchTasks($report);
 
-        $process = new Process(
-            [config('yaware.node_binary'), config('yaware.worker_script')],
-            config('yaware.worker_cwd'),
-            WorkerEnvironment::base() + [
-                'YAWARE_WORKER' => 'true',
-                'YAWARE_EMAIL' => $loginEmail,
-                'YAWARE_PASSWORD' => $loginPassword,
-                'YAWARE_DATE' => $report->report_date->format('d.m.Y'),
-                'YAWARE_TARGET_EMAIL' => $report->employee->email,
-                'YAWARE_DOWNLOAD_DIR' => $outputDirectory,
-                'YAWARE_HEADLESS' => config('yaware.headless') ? 'true' : 'false',
-                // Історична назва змінної воркера: сюди йдуть таски будь-якого
-                // трекера — форма однакова, і Excel-скрипт про різницю не знає.
-                'YAWARE_TRELLO_TASKS' => json_encode($this->workerTasks($tasks ?? []), JSON_UNESCAPED_UNICODE),
-            ],
-            null,
-            (float) config('yaware.timeout'),
-        );
-
         try {
-            $process->mustRun();
-            $result = $this->parseWorkerResult($process->getOutput());
-        } catch (Throwable $exception) {
-            $workerError = $this->workerError($report, $process);
-            $errorMessage = $workerError['message'] ?? $this->buildErrorMessage($exception, $process);
-
-            if ($this->shouldRetry($workerError['code'] ?? null)) {
-                Log::warning("Звіт #{$report->id} не згенерувався з {$this->attempts()}-ї спроби, повтор через ".self::RETRY_DELAY_SECONDS." с: {$errorMessage}");
-
-                // Працівнику поки не пишемо: звіт ще може вийти з другої спроби.
-                $report->update([
-                    'status' => Report::STATUS_PENDING,
-                    'error_message' => null,
-                ]);
-                $this->release(self::RETRY_DELAY_SECONDS);
-
-                return;
-            }
-
-            $report->update([
-                'status' => Report::STATUS_FAILED,
-                'error_message' => $errorMessage,
-            ]);
-            $this->notifyFailure($report);
+            $result = app(YawareWorker::class)->run($report, $tasks ?? []);
+        } catch (YawareWorkerException $exception) {
+            $this->handleWorkerFailure($report, $exception);
 
             return;
         }
@@ -128,16 +70,18 @@ class GenerateYawareReport implements ShouldQueue
         // узагалі: такий звіт однаково довелось би переробляти, а поки він
         // лежить «готовий», ніхто цього не помічає. Працівник дізнається
         // причину з Telegram і формує звіт заново, поправивши таски.
-        if ($blockReason = $this->coverageBlockReason($tasks, $result, $history)) {
+        if ($blockReason = $this->coverageBlockReason($tasks, $result)) {
             $this->blockReport($report, $tasks, $blockReason);
 
             return;
         }
 
+        $isEmptyDay = $this->isEmptyDay($history);
+
         // Тасок за день немає зовсім: у сервісі показуємо лише статистику дня,
         // а файл звіту і Google Таблиця чекають на таски — після перегенерації
         // з тасками звіт піде звичайним шляхом.
-        if ($tasks === [] && ! $this->isEmptyDay($history)) {
+        if ($tasks === [] && ! $isEmptyDay) {
             $this->completeWithoutTasks($report, $result, $history, $tasksWarning);
 
             return;
@@ -145,8 +89,8 @@ class GenerateYawareReport implements ShouldQueue
 
         ReportFile::create([
             'report_id' => $report->id,
-            'type' => 'combined_excel',
-            'path' => 'reports/'.$report->id.'/'.basename($result['file']),
+            'type' => ReportFile::TYPE_EXCEL,
+            'path' => $report->filesDirectory().'/'.basename($result['file']),
             'original_name' => basename($result['file']),
         ]);
 
@@ -155,54 +99,60 @@ class GenerateYawareReport implements ShouldQueue
         // такий день дає порожню вкладку, нульовий рядок у Табелі і спам
         // «додайте таски». Excel-файл лишається як підтвердження,
         // що день перевірено.
-        if ($this->isEmptyDay($history)) {
+        if ($isEmptyDay) {
             app(ReportHistoryService::class)->forgetDay($report);
-
-            $report->update([
-                'status' => Report::STATUS_COMPLETED,
-                'summary' => ['Результат' => Report::EMPTY_DAY_RESULT],
-                'tasks' => $tasks,
-                'generated_at' => now(),
-            ]);
+            $this->complete($report, [Report::SUMMARY_RESULT => Report::EMPTY_DAY_RESULT], [], $tasks);
 
             return;
         }
 
+        $this->completeWithSheet($report, $result, $history, $tasks, $tasksWarning);
+    }
+
+    public function failed(Throwable $exception): void
+    {
+        $report = $this->report->fresh(['employee']);
+
+        if ($report) {
+            $this->markFailed($report, mb_substr($exception->getMessage(), 0, 2000));
+        }
+    }
+
+    /**
+     * Повний звіт: історія, вкладка в Google Таблиці, сповіщення і AI-розбір.
+     *
+     * @param  array<string, mixed>  $result
+     * @param  array<string, mixed>|null  $history
+     */
+    private function completeWithSheet(Report $report, array $result, ?array $history, ?array $tasks, ?string $tasksWarning): void
+    {
         $summary = $result['summary'] ?? null;
+        $warnings = $result['warnings'] ?? [];
 
         if ($historyWarning = $this->storeHistory($report, $history)) {
-            $result['warnings'][] = $historyWarning;
+            $warnings[] = $historyWarning;
         }
 
         [$googleSheetUrl, $googleWarnings] = app(ReportSheetPublisher::class)->publish($report, $result['file']);
 
         if ($googleSheetUrl) {
-            $summary = ($summary ?? []) + ['Google Таблиця' => $googleSheetUrl];
+            $summary = ($summary ?? []) + [Report::SUMMARY_GOOGLE_SHEET => $googleSheetUrl];
         }
 
         if ($tasksWarning) {
-            $result['warnings'][] = $tasksWarning;
+            $warnings[] = $tasksWarning;
         }
 
-        foreach ($googleWarnings as $googleWarning) {
-            $result['warnings'][] = $googleWarning;
-        }
+        // Попередження Google — останніми: reports:sync-google відрізає
+        // невдале вивантаження від маркера до кінця тексту.
+        array_push($warnings, ...$googleWarnings);
 
-        if (! empty($result['warnings'])) {
-            $summary = ($summary ?? []) + ['Попередження' => implode("\n", $result['warnings'])];
-        }
+        // Знімок тасок на момент генерації — готовий звіт показує їх незалежно
+        // від того, що змінилося в трекері пізніше; null = знімка немає
+        // (таск-трекер був недоступний).
+        $this->complete($report, $summary, $warnings, $tasks);
 
-        $report->update([
-            'status' => Report::STATUS_COMPLETED,
-            'summary' => $summary,
-            // Знімок тасок на момент генерації — готовий звіт показує їх незалежно
-            // від того, що змінилося в трекері пізніше; null = знімка немає
-            // (таск-трекер був недоступний).
-            'tasks' => $tasks,
-            'generated_at' => now(),
-        ]);
-
-        $this->notifySuccess($report, $tasks, $googleSheetUrl);
+        app(ReportNotifier::class)->completed($report, $tasks, $googleSheetUrl);
 
         // AI-розбір дня для адміністратора — окремою джобою в черзі analysis,
         // щоб довгий запит до моделі не тримав чергу звітів і не зривав
@@ -210,57 +160,6 @@ class GenerateYawareReport implements ShouldQueue
         if (app(AiAnalysisService::class)->isConfigured()) {
             GenerateDailyAnalysis::dispatch($report);
         }
-    }
-
-    /**
-     * Telegram-сповіщення працівнику про готовий звіт; якщо тасок у трекері за
-     * день немає — просить заповнити їх і перегенерувати звіт.
-     */
-    private function notifySuccess(Report $report, ?array $tasks, ?string $googleSheetUrl): void
-    {
-        $lines = ["✅ Звіт за {$report->report_date->format('d.m.Y')} згенеровано."];
-
-        if ($googleSheetUrl) {
-            $lines[] = 'Вкладка у <a href="'.e($googleSheetUrl).'">Google Таблиці</a>.';
-        }
-
-        if (empty($tasks)) {
-            $tracker = TaskProviders::forUser($report->employee?->user)->providerLabel();
-            $lines[] = "⚠️ Тасок у {$tracker} за цей день немає. Додайте виконані таски з проставленим часом початку й завершення і перегенеруйте звіт на ".config('app.url').', щоб вони потрапили у звіт.';
-        }
-
-        app(TelegramService::class)->notify($report->employee?->user, implode("\n", $lines), 'HTML');
-    }
-
-    /**
-     * Причина не віддавати звіт: у дні є час поза тасками. Текст готовий до
-     * показу працівнику; null — звіт іде звичайним шляхом.
-     *
-     * Рахує розподіл воркер (колонка «Поза тасками» в Excel), тож короткі
-     * залишки між тасками сюди не доходять — вони вже приклеєні до сусідньої
-     * таски тим самим порогом, що й у файлі.
-     */
-    private function coverageBlockReason(?array $tasks, array $result, ?array $history): ?string
-    {
-        // Тасок не отримано взагалі (трекер не налаштований або впав) — це не
-        // провина працівника: звіт іде далі з попередженням, як і раніше.
-        if ($tasks === null) {
-            return null;
-        }
-
-        $outsideSeconds = $result['outsideSeconds'] ?? null;
-
-        // День зовсім без тасок не блокується — він стає звітом лише зі
-        // статистикою (див. completeWithoutTasks()).
-        if ($tasks === []) {
-            return null;
-        }
-
-        if (is_numeric($outsideSeconds) && (int) $outsideSeconds > 0) {
-            return 'У дні є '.$this->formatDuration((int) $outsideSeconds).' робочого часу поза тасками.';
-        }
-
-        return null;
     }
 
     /**
@@ -288,14 +187,27 @@ class GenerateYawareReport implements ShouldQueue
 
         $warnings[] = 'тасок за день немає — файл звіту не сформовано і в Google Таблицю не вивантажено.';
 
+        $this->complete($report, $result['summary'] ?? [], $warnings, []);
+
+        app(ReportNotifier::class)->completed($report, [], null);
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $summary
+     * @param  array<int, string>  $warnings
+     */
+    private function complete(Report $report, ?array $summary, array $warnings, ?array $tasks): void
+    {
+        if ($warnings !== []) {
+            $summary = ($summary ?? []) + [Report::SUMMARY_WARNINGS => implode("\n", $warnings)];
+        }
+
         $report->update([
             'status' => Report::STATUS_COMPLETED,
-            'summary' => ($result['summary'] ?? []) + ['Попередження' => implode("\n", $warnings)],
-            'tasks' => [],
+            'summary' => $summary,
+            'tasks' => $tasks,
             'generated_at' => now(),
         ]);
-
-        $this->notifySuccess($report, [], null);
     }
 
     /**
@@ -316,13 +228,63 @@ class GenerateYawareReport implements ShouldQueue
             'generated_at' => null,
         ]);
 
-        $tracker = TaskProviders::forUser($report->employee?->user)->providerLabel();
+        app(ReportNotifier::class)->blocked($report, $reason);
+    }
 
-        app(TelegramService::class)->notify($report->employee?->user, implode("\n", [
-            "⚠️ Звіт за {$report->report_date->format('d.m.Y')} не сформовано.",
-            $reason,
-            "Додайте у {$tracker} таски з проставленим часом початку й завершення так, щоб вони покрили весь день, і сформуйте звіт заново: ".config('app.url'),
-        ]));
+    private function markFailed(Report $report, string $message): void
+    {
+        $report->update([
+            'status' => Report::STATUS_FAILED,
+            'error_message' => $message,
+        ]);
+
+        app(ReportNotifier::class)->failed($report);
+    }
+
+    /**
+     * Повтор має сенс, лише поки є спроби і воркер не повідомив про відмову,
+     * яку повтор не змінить.
+     */
+    private function handleWorkerFailure(Report $report, YawareWorkerException $exception): void
+    {
+        if ($this->attempts() >= $this->tries || ! $exception->isRetryable()) {
+            $this->markFailed($report, $exception->getMessage());
+
+            return;
+        }
+
+        Log::warning("Звіт #{$report->id} не згенерувався з {$this->attempts()}-ї спроби, повтор через ".self::RETRY_DELAY_SECONDS." с: {$exception->getMessage()}");
+
+        // Працівнику поки не пишемо: звіт ще може вийти з другої спроби.
+        $report->markPending();
+        $this->release(self::RETRY_DELAY_SECONDS);
+    }
+
+    /**
+     * Причина не віддавати звіт: у дні є час поза тасками. Текст готовий до
+     * показу працівнику; null — звіт іде звичайним шляхом.
+     *
+     * Рахує розподіл воркер (колонка «Поза тасками» в Excel), тож короткі
+     * залишки між тасками сюди не доходять — вони вже приклеєні до сусідньої
+     * таски тим самим порогом, що й у файлі.
+     */
+    private function coverageBlockReason(?array $tasks, array $result): ?string
+    {
+        // Тасок не отримано взагалі (трекер не налаштований або впав) — це не
+        // провина працівника: звіт іде далі з попередженням. День зовсім без
+        // тасок теж не блокується — він стає звітом лише зі статистикою
+        // (див. completeWithoutTasks()).
+        if (empty($tasks)) {
+            return null;
+        }
+
+        $outsideSeconds = $result['outsideSeconds'] ?? null;
+
+        if (is_numeric($outsideSeconds) && (int) $outsideSeconds > 0) {
+            return 'У дні є '.$this->formatDuration((int) $outsideSeconds).' робочого часу поза тасками.';
+        }
+
+        return null;
     }
 
     /**
@@ -339,16 +301,6 @@ class GenerateYawareReport implements ShouldQueue
         ]);
 
         return $parts ? implode(' ', $parts) : "{$seconds} с";
-    }
-
-    private function notifyFailure(Report $report): void
-    {
-        $reason = mb_substr((string) $report->error_message, 0, 500);
-
-        app(TelegramService::class)->notify(
-            $report->employee?->user,
-            "❌ Звіт за {$report->report_date->format('d.m.Y')} не згенерувався.\n{$reason}\nСпробуйте ще раз: ".config('app.url'),
-        );
     }
 
     /**
@@ -375,22 +327,6 @@ class GenerateYawareReport implements ShouldQueue
 
             return [null, "таски {$provider->providerLabel()} не отримано — звіт згенеровано без розподілу часу по тасках."];
         }
-    }
-
-    /**
-     * Спрощений формат тасок для Excel-воркера (колонка «Завдання» і табличка тасок).
-     * Форма однакова для обох трекерів, тож воркер про різницю не знає.
-     *
-     * @return array<int, array<string, ?string>>
-     */
-    private function workerTasks(array $tasks): array
-    {
-        return array_map(fn (array $task) => [
-            'name' => $task['name'],
-            'comment' => $task['comment'],
-            'start' => $task['start'],
-            'due' => $task['due'],
-        ], $tasks);
     }
 
     /**
@@ -455,83 +391,5 @@ class GenerateYawareReport implements ShouldQueue
 
             return 'день не збережено в історичну БД: '.mb_substr($exception->getMessage(), 0, 300);
         }
-    }
-
-    public function failed(Throwable $exception): void
-    {
-        $report = $this->report->fresh(['employee']);
-
-        $report?->update([
-            'status' => Report::STATUS_FAILED,
-            'error_message' => mb_substr($exception->getMessage(), 0, 2000),
-        ]);
-
-        if ($report) {
-            $this->notifyFailure($report);
-        }
-    }
-
-    private function parseWorkerResult(string $stdout): array
-    {
-        $lines = array_values(array_filter(array_map('trim', explode("\n", $stdout))));
-        $lastLine = end($lines);
-
-        $result = $lastLine ? json_decode($lastLine, true) : null;
-
-        if (! is_array($result) || ($result['status'] ?? null) !== 'ok' || empty($result['file'])) {
-            throw new \RuntimeException('Воркер завершився без валідного JSON-результату. Stdout: '.mb_substr($stdout, -500));
-        }
-
-        if (! is_file($result['file'])) {
-            throw new \RuntimeException("Воркер повідомив про файл, якого не існує: {$result['file']}");
-        }
-
-        return $result;
-    }
-
-    /**
-     * Повтор має сенс, лише поки є спроби і воркер не повідомив про відмову,
-     * яку повтор не змінить. Падіння без коду (таймаут, крах процесу, битий
-     * вивід) вважаємо тимчасовим.
-     */
-    private function shouldRetry(?string $workerErrorCode): bool
-    {
-        return $this->attempts() < $this->tries
-            && ! in_array($workerErrorCode, self::PERMANENT_WORKER_ERRORS, true);
-    }
-
-    /**
-     * Помилка від самого воркера: при падінні він віддає останнім рядком
-     * stdout JSON {status: 'error', message, code, screenshot}; скріншот
-     * сторінки лишається на диску в теці звіту і в UI не показується.
-     * null — воркер упав без структурованої помилки (fallback на stderr).
-     *
-     * @return array{message: string, code: ?string}|null
-     */
-    private function workerError(Report $report, Process $process): ?array
-    {
-        $lines = array_values(array_filter(array_map('trim', explode("\n", $process->getOutput()))));
-        $result = $lines ? json_decode((string) end($lines), true) : null;
-
-        if (! is_array($result) || ($result['status'] ?? null) !== 'error' || empty($result['message'])) {
-            return null;
-        }
-
-        Log::warning("Воркер звіту #{$report->id} завершився з помилкою: {$result['message']}", [
-            'screenshot' => $result['screenshot'] ?? null,
-            'stderr' => mb_substr(trim($process->getErrorOutput()), -1500),
-        ]);
-
-        return [
-            'message' => $result['message'],
-            'code' => is_string($result['code'] ?? null) ? $result['code'] : null,
-        ];
-    }
-
-    private function buildErrorMessage(Throwable $exception, Process $process): string
-    {
-        $stderrTail = mb_substr(trim($process->getErrorOutput()), -1500);
-
-        return mb_substr(trim($exception->getMessage()."\n\n".$stderrTail), 0, 2000);
     }
 }

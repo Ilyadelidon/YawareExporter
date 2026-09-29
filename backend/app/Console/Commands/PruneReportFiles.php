@@ -31,7 +31,7 @@ class PruneReportFiles extends Command
             return self::FAILURE;
         }
 
-        $root = storage_path('app/reports');
+        $root = storage_path('app/'.Report::FILES_ROOT);
 
         if (! File::isDirectory($root)) {
             return self::SUCCESS;
