@@ -21,7 +21,7 @@ const routes = [
       {
         path: 'history',
         name: 'history',
-        component: () => import('../views/HistoryView.vue'),
+        component: () => import('../views/StatsView.vue'),
       },
       {
         path: 'plans',

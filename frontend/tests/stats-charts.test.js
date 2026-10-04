@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { dailySeries, labelEvery, niceTicks, periodDates } from '../src/utils/statsCharts';
+import { matchPreset, periodPresets } from '../src/utils/statsPresets';
+import { toIsoDate } from '../src/utils/dates';
 
 describe('periodDates', () => {
   it('включає обидва кінці і переходить через місяць', () => {
@@ -34,5 +36,27 @@ describe('labelEvery', () => {
   it('проріджує підписи, що не влазять', () => {
     expect(labelEvery(30, 660)).toBe(2);
     expect(labelEvery(7, 660)).toBe(1);
+  });
+});
+
+describe('periodPresets', () => {
+  // Четвер, 2026-10-01: тиждень почався в понеділок 28.09, місяць — 01.10.
+  const presets = periodPresets(new Date(2026, 9, 1));
+  const iso = (value) => {
+    const p = presets.find((preset) => preset.value === value);
+    return [toIsoDate(p.from), toIsoDate(p.to)];
+  };
+
+  it('рахує тижні з понеділка і місяці цілком', () => {
+    expect(iso('this_week')).toEqual(['2026-09-28', '2026-10-01']);
+    expect(iso('last_week')).toEqual(['2026-09-21', '2026-09-27']);
+    expect(iso('this_month')).toEqual(['2026-10-01', '2026-10-01']);
+    expect(iso('last_month')).toEqual(['2026-09-01', '2026-09-30']);
+  });
+
+  it('matchPreset знаходить пресет лише при точному збігу дат', () => {
+    expect(matchPreset(presets, new Date(2026, 8, 1), new Date(2026, 8, 30))).toBe('last_month');
+    expect(matchPreset(presets, new Date(2026, 8, 2), new Date(2026, 8, 30))).toBeNull();
+    expect(matchPreset(presets, null, new Date(2026, 8, 30))).toBeNull();
   });
 });

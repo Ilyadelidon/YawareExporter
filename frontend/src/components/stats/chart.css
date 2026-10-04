@@ -25,35 +25,6 @@
   color: #2b2f33;
 }
 
-.chart-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 14px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  font-size: 12px;
-  color: var(--text-dim);
-}
-
-.chart-legend li {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.swatch {
-  width: 10px;
-  height: 10px;
-  border-radius: 2px;
-}
-
-.line-key {
-  width: 14px;
-  height: 2px;
-  border-radius: 1px;
-}
-
 .chart-box {
   position: relative;
   min-height: 220px;
@@ -88,12 +59,6 @@ svg text {
 
 .hit:focus-visible {
   fill: rgba(20, 157, 141, 0.06);
-}
-
-.crosshair {
-  stroke: #9aa1a9;
-  stroke-width: 1;
-  shape-rendering: crispEdges;
 }
 
 .chart-tooltip {

@@ -2,6 +2,7 @@
 // Топ діяльностей за період: колір смуги — продуктивність.
 import { computed } from 'vue';
 import StatsBarList from './StatsBarList.vue';
+import StatsLegend from './StatsLegend.vue';
 import { CHART_SERIES } from './chartColors';
 import { formatDuration } from '../../utils/duration';
 
@@ -33,9 +34,7 @@ const legend = computed(() => {
   <div class="chart-card panel" :class="{ 'is-loading': loading }">
     <div class="chart-head">
       <div class="chart-title">Топ діяльностей</div>
-      <ul v-if="legend.length > 1" class="chart-legend">
-        <li v-for="s in legend" :key="s.key"><span class="swatch" :style="{ background: s.color }"></span>{{ s.label }}</li>
-      </ul>
+      <StatsLegend v-if="legend.length > 1" :series="legend" />
     </div>
     <StatsBarList :items="items" />
   </div>

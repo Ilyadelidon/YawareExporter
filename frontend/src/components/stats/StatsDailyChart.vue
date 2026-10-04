@@ -5,6 +5,7 @@ import { useElementWidth } from '../../composables/useElementWidth';
 import { labelEvery, niceTicks } from '../../utils/statsCharts';
 import { formatDottedDate } from '../../utils/dates';
 import { formatDuration } from '../../utils/duration';
+import StatsLegend from './StatsLegend.vue';
 import { CHART_SERIES } from './chartColors';
 
 const props = defineProps({
@@ -90,9 +91,7 @@ const tooltip = computed(() => {
   <div class="chart-card panel" :class="{ 'is-loading': loading }">
     <div class="chart-head">
       <div class="chart-title">Час по днях</div>
-      <ul class="chart-legend">
-        <li v-for="s in SERIES" :key="s.key"><span class="swatch" :style="{ background: s.color }"></span>{{ s.label }}</li>
-      </ul>
+      <StatsLegend :series="SERIES" />
     </div>
 
     <div ref="box" class="chart-box" @pointerleave="hovered = null">

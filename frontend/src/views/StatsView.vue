@@ -5,12 +5,13 @@ import Select from 'primevue/select';
 import Message from 'primevue/message';
 import client from '../api/client';
 import UiIcon from '../components/UiIcon.vue';
-import StatsTotals from '../components/stats/StatsTotals.vue';
 import SegmentedControl from '../components/integrations/SegmentedControl.vue';
+import StatsTotals from '../components/stats/StatsTotals.vue';
 import StatsDailyChart from '../components/stats/StatsDailyChart.vue';
 import StatsTopActivities from '../components/stats/StatsTopActivities.vue';
 import StatsTasks from '../components/stats/StatsTasks.vue';
 import { dailySeries } from '../utils/statsCharts';
+import { matchPreset, periodPresets } from '../utils/statsPresets';
 import { useStats } from '../composables/useStats';
 import { useAuthStore } from '../stores/auth';
 import { toIsoDate } from '../utils/dates';
@@ -21,29 +22,12 @@ const { stats, totals, period, topActivities, tasks, loading, error, load } = us
 const today = new Date();
 const dateFrom = ref(new Date(today.getFullYear(), today.getMonth(), 1));
 const dateTo = ref(today);
+const selectedEmployee = ref(null);
+const employees = ref([]);
 
-// Швидкі періоди. Тиждень — з понеділка; поточні тиждень і місяць — по сьогодні.
-const PRESETS = (() => {
-  const y = today.getFullYear();
-  const m = today.getMonth();
-  const monday = new Date(y, m, today.getDate() - ((today.getDay() + 6) % 7));
-  const lastMonday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() - 7);
-  const lastSunday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() - 1);
-  return [
-    { value: 'this_week', label: 'Цей тиждень', from: monday, to: today },
-    { value: 'last_week', label: 'Минулий тиждень', from: lastMonday, to: lastSunday },
-    { value: 'this_month', label: 'Цей місяць', from: new Date(y, m, 1), to: today },
-    { value: 'last_month', label: 'Минулий місяць', from: new Date(y, m - 1, 1), to: new Date(y, m, 0) },
-  ];
-})();
-
-// Підсвічуємо пресет, лише поки дати збігаються з ним; ручний вибір дат його знімає.
-const activePreset = computed(() => {
-  if (!dateFrom.value || !dateTo.value) return null;
-  const from = toIsoDate(dateFrom.value);
-  const to = toIsoDate(dateTo.value);
-  return PRESETS.find((p) => toIsoDate(p.from) === from && toIsoDate(p.to) === to)?.value ?? null;
-});
+const PRESETS = periodPresets(today);
+// Підсвічуємо пресет, лише поки дати збігаються з ним.
+const activePreset = computed(() => matchPreset(PRESETS, dateFrom.value, dateTo.value));
 
 function applyPreset(value) {
   const preset = PRESETS.find((p) => p.value === value);
@@ -51,9 +35,8 @@ function applyPreset(value) {
   dateTo.value = preset.to;
   loadStats();
 }
-const selectedEmployee = ref(null);
-const employees = ref([]);
 
+const hasData = computed(() => Boolean(period.value && stats.value.length));
 const dailyChart = computed(() => (period.value
   ? dailySeries(stats.value, period.value.date_from, period.value.date_to)
   : []));
@@ -81,7 +64,7 @@ onMounted(() => Promise.all([loadStats(), loadEmployees()]));
 </script>
 
 <template>
-  <div class="history-page">
+  <div class="stats-page">
     <div class="page-head">
       <div class="page-head-info">
         <div class="page-head-icon">
@@ -133,24 +116,24 @@ onMounted(() => Promise.all([loadStats(), loadEmployees()]));
       />
     </div>
 
-    <div v-if="period && stats.length" class="charts-row">
+    <div v-if="hasData" class="charts-row">
       <StatsDailyChart :days="dailyChart" :loading="loading" />
       <StatsTotals v-if="totals" :totals="totals" :loading="loading" />
     </div>
 
-    <div v-if="period && stats.length" class="charts-row is-even">
+    <div v-if="hasData" class="charts-row is-even">
       <StatsTopActivities :activities="topActivities" :loading="loading" />
       <StatsTasks v-if="tasks" :tasks="tasks" :show-employee="auth.isAdmin && !selectedEmployee" :loading="loading" />
     </div>
 
-    <div v-if="period && !stats.length && !loading" class="panel empty-panel">
+    <div v-if="period && !hasData && !loading" class="panel empty-panel">
       За обраний період даних немає. Статистика наповнюється під час генерації звітів — сформуйте звіт за потрібний день на вкладці «Звіти».
     </div>
   </div>
 </template>
 
 <style scoped>
-.history-page {
+.stats-page {
   display: flex;
   flex-direction: column;
 }
