@@ -9,14 +9,14 @@ import StatsTotals from '../components/stats/StatsTotals.vue';
 import SegmentedControl from '../components/integrations/SegmentedControl.vue';
 import StatsDailyChart from '../components/stats/StatsDailyChart.vue';
 import StatsTopActivities from '../components/stats/StatsTopActivities.vue';
-import StatsPlan from '../components/stats/StatsPlan.vue';
+import StatsTasks from '../components/stats/StatsTasks.vue';
 import { dailySeries } from '../utils/statsCharts';
 import { useStats } from '../composables/useStats';
 import { useAuthStore } from '../stores/auth';
 import { toIsoDate } from '../utils/dates';
 
 const auth = useAuthStore();
-const { stats, totals, period, topActivities, plan, reportTasks, loading, error, load } = useStats();
+const { stats, totals, period, topActivities, tasks, loading, error, load } = useStats();
 
 const today = new Date();
 const dateFrom = ref(new Date(today.getFullYear(), today.getMonth(), 1));
@@ -140,7 +140,7 @@ onMounted(() => Promise.all([loadStats(), loadEmployees()]));
 
     <div v-if="period && stats.length" class="charts-row is-even">
       <StatsTopActivities :activities="topActivities" :loading="loading" />
-      <StatsPlan v-if="plan" :plan="plan" :tasks="reportTasks" :show-employee="auth.isAdmin && !selectedEmployee" :loading="loading" />
+      <StatsTasks v-if="tasks" :tasks="tasks" :show-employee="auth.isAdmin && !selectedEmployee" :loading="loading" />
     </div>
 
     <div v-if="period && !stats.length && !loading" class="panel empty-panel">

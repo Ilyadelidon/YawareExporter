@@ -5,10 +5,8 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\ActivityEntry;
 use App\Models\DailyStat;
-use App\Models\PlanTask;
 use App\Models\Report;
-use App\Services\Stats\PeriodPlan;
-use App\Services\Stats\ReportTaskTime;
+use App\Services\Stats\PeriodTasks;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -40,7 +38,7 @@ class StatsController extends Controller
             ->orderBy('employee_id')
             ->get();
 
-        // Той самий фільтр для діяльностей, задач плану і звітів: працівник — лише свої, адмін — усі або обраний.
+        // Той самий фільтр для діяльностей і звітів: працівник — лише свої, адмін — усі або обраний.
         $ownedBy = fn (Builder $query): Builder => $query->when(
             $user->isAdmin(),
             fn ($q) => $q->when(! empty($validated['employee_id']), fn ($q) => $q->where('employee_id', $validated['employee_id'])),
@@ -52,8 +50,7 @@ class StatsController extends Controller
             'totals' => DailyStat::totals($stats),
             'period' => ['date_from' => $dateFrom, 'date_to' => $dateTo],
             'activities' => $this->topActivities($ownedBy(ActivityEntry::query()->whereBetween('date', [$dateFrom, $dateTo]))),
-            'plan' => $this->periodPlan($ownedBy, $dateFrom, $dateTo),
-            'report_tasks' => (new ReportTaskTime)->top(
+            'tasks' => (new PeriodTasks)->summarize(
                 $ownedBy(Report::query())
                     ->where('status', Report::STATUS_COMPLETED)
                     ->whereBetween('report_date', [$dateFrom, $dateTo])
@@ -82,24 +79,6 @@ class StatsController extends Controller
                 'productivity' => $row->productivity,
                 'seconds' => (int) $row->seconds,
             ]);
-    }
-
-    /**
-     * План за період: стан задач плану і над якими з них працювали (відмітки днів у Планах).
-     *
-     * @param  \Closure(Builder): Builder  $ownedBy
-     * @return array<string, mixed>
-     */
-    private function periodPlan(\Closure $ownedBy, string $from, string $to): array
-    {
-        $planTasks = $ownedBy(PlanTask::query())
-            ->with([
-                'project:id,name,archived_at',
-                'days' => fn ($query) => $query->whereBetween('date', [$from, $to]),
-            ])
-            ->get();
-
-        return (new PeriodPlan)->summarize($planTasks);
     }
 
     public function activities(Request $request): JsonResponse

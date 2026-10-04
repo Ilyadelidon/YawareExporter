@@ -5,8 +5,6 @@ namespace Tests\Feature;
 use App\Models\ActivityEntry;
 use App\Models\DailyStat;
 use App\Models\Employee;
-use App\Models\PlanProject;
-use App\Models\PlanTask;
 use App\Models\Report;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -104,49 +102,7 @@ class StatsAccessTest extends TestCase
             ->assertJsonPath('activities.0.seconds', 5000);
     }
 
-    public function test_stats_include_plan_for_period(): void
-    {
-        $mine = $this->employee('a@example.com');
-        $theirs = $this->employee('b@example.com');
-        $project = PlanProject::create(['name' => 'TumTum']);
-        $archived = PlanProject::create(['name' => 'Старий', 'archived_at' => now()]);
-        $planTask = fn (PlanProject $project, Employee $employee, string $title, string $status) => PlanTask::create([
-            'plan_project_id' => $project->id,
-            'employee_id' => $employee->id,
-            'title' => $title,
-            'status' => $status,
-        ]);
-
-        $planTask($project, $mine, 'Інтеграція', PlanTask::STATUS_IN_PROGRESS);
-        // Над «Інтеграцією» в періоді не працювали — у «в роботі» вона не рахується.
-        $marked = $planTask($project, $mine, 'Дизайн', PlanTask::STATUS_DONE);
-        $planTask($project, $mine, 'Бекапи', PlanTask::STATUS_PENDING);
-        // Архівний проект не входить у стан плану, але робота над ним у періоді видна.
-        $old = $planTask($archived, $mine, 'Старе', PlanTask::STATUS_PAUSED);
-        $planTask($project, $theirs, 'Чуже', PlanTask::STATUS_PENDING);
-
-        foreach (['2026-09-01', '2026-09-02', '2026-09-03'] as $date) {
-            $marked->days()->create(['date' => $date]);
-        }
-        $old->days()->create(['date' => '2026-09-04']);
-        // Відмітка поза періодом не рахується.
-        $marked->days()->create(['date' => '2026-08-20']);
-
-        Sanctum::actingAs($mine->user);
-
-        $this->getJson('/api/stats?date_from=2026-09-01&date_to=2026-09-30')
-            ->assertOk()
-            ->assertJsonPath('plan.total', 3)
-            ->assertJsonPath('plan.statuses', [
-                ['status' => PlanTask::STATUS_PENDING, 'label' => 'Очікує виконання', 'count' => 1],
-                ['status' => PlanTask::STATUS_IN_PROGRESS, 'label' => 'В роботі', 'count' => 1],
-                ['status' => PlanTask::STATUS_DONE, 'label' => 'Виконано', 'count' => 1],
-            ])
-            ->assertJsonPath('plan.worked_tasks', 2)
-            ->assertJsonPath('plan.worked_days', 4);
-    }
-
-    public function test_stats_include_report_tasks_with_most_time(): void
+    public function test_stats_include_report_tasks_for_period(): void
     {
         $mine = $this->employee('a@example.com');
         $theirs = $this->employee('b@example.com');
@@ -156,37 +112,46 @@ class StatsAccessTest extends TestCase
             'status' => $status,
             'tasks' => $tasks,
         ]);
-        $task = fn (string $name, string $start, string $due, ?string $url = null) => compact('name', 'start', 'due', 'url');
+        $task = fn (string $name, string $list, string $start, string $due, ?string $url = null) => compact('name', 'list', 'start', 'due', 'url');
 
         $report($mine, '2026-09-01', [
-            $task('Інтеграція', '2026-09-01 09:00', '2026-09-01 11:00', 'https://trello.com/c/a'),
-            $task('Мітинг', '2026-09-01 11:00', '2026-09-01 11:30'),
+            $task('Інтеграція', 'В роботі', '2026-09-01 09:00', '2026-09-01 11:00', 'https://trello.com/c/a'),
+            $task('Мітинг', 'Готово', '2026-09-01 11:00', '2026-09-01 11:30'),
         ]);
-        // Картку перейменували — це та сама таска (те саме посилання), назва береться остання.
+        // Картку перейменували й пересунули — це та сама таска (те саме посилання),
+        // назва й колонка беруться з останнього знімка.
         $report($mine, '2026-09-02', [
-            $task('Інтеграція з CRM', '2026-09-02 09:00', '2026-09-02 10:00', 'https://trello.com/c/a'),
-            $task('Мітинг', '2026-09-02 10:00', '2026-09-02 10:45'),
-            $task('Без часу', '', ''),
+            $task('Інтеграція з CRM', 'На перевірці', '2026-09-02 09:00', '2026-09-02 10:00', 'https://trello.com/c/a'),
+            $task('Мітинг', 'Готово', '2026-09-02 10:00', '2026-09-02 10:45'),
+            // Таска без часу рахується в кількості, але не в топі за часом.
+            $task('Без часу', 'Готово', '', ''),
         ]);
         // Не готовий звіт, звіт поза періодом і чужий звіт не рахуються.
-        $report($mine, '2026-09-03', [$task('Збій', '2026-09-03 09:00', '2026-09-03 18:00')], Report::STATUS_FAILED);
-        $report($mine, '2026-08-31', [$task('Серпень', '2026-08-31 09:00', '2026-08-31 18:00')]);
-        $report($theirs, '2026-09-01', [$task('Чуже', '2026-09-01 09:00', '2026-09-01 18:00')]);
+        $report($mine, '2026-09-03', [$task('Збій', 'Готово', '2026-09-03 09:00', '2026-09-03 18:00')], Report::STATUS_FAILED);
+        $report($mine, '2026-08-31', [$task('Серпень', 'Готово', '2026-08-31 09:00', '2026-08-31 18:00')]);
+        $report($theirs, '2026-09-01', [$task('Чуже', 'Готово', '2026-09-01 09:00', '2026-09-01 18:00')]);
 
         Sanctum::actingAs($mine->user);
 
         $this->getJson('/api/stats?date_from=2026-09-01&date_to=2026-09-30')
             ->assertOk()
-            ->assertJsonCount(2, 'report_tasks')
-            ->assertJsonPath('report_tasks.0', [
+            ->assertJsonPath('tasks.total', 3)
+            ->assertJsonPath('tasks.seconds', 3 * 3600 + 75 * 60)
+            ->assertJsonPath('tasks.lists', [
+                ['list' => 'Готово', 'count' => 2],
+                ['list' => 'На перевірці', 'count' => 1],
+            ])
+            ->assertJsonCount(2, 'tasks.top')
+            ->assertJsonPath('tasks.top.0', [
                 'name' => 'Інтеграція з CRM',
                 'url' => 'https://trello.com/c/a',
+                'list' => 'На перевірці',
                 'seconds' => 3 * 3600,
                 'days' => 2,
                 'employees' => ['a@example.com'],
             ])
-            ->assertJsonPath('report_tasks.1.name', 'Мітинг')
-            ->assertJsonPath('report_tasks.1.seconds', 75 * 60);
+            ->assertJsonPath('tasks.top.1.name', 'Мітинг')
+            ->assertJsonPath('tasks.top.1.seconds', 75 * 60);
     }
 
     public function test_employee_cannot_open_someone_elses_activities(): void
