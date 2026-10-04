@@ -4,69 +4,79 @@ import { formatDuration } from '../../utils/duration';
 
 const props = defineProps({
   totals: { type: Object, required: true },
+  loading: { type: Boolean, default: false },
 });
 
 const cards = computed(() => [
-  { label: 'Днів у вибірці', value: props.totals.days },
-  { label: 'Загальний робочий час', value: formatDuration(props.totals.work_seconds) },
-  { label: 'Продуктивно', value: formatDuration(props.totals.productive_seconds), class: 'is-productive' },
-  { label: 'Непродуктивно', value: formatDuration(props.totals.unproductive_seconds), class: 'is-unproductive' },
-  { label: 'Нейтрально', value: formatDuration(props.totals.neutral_seconds), class: 'is-neutral' },
-  { label: 'Запізнення разом', value: formatDuration(props.totals.lateness_seconds) },
-]);
+  { key: 'days', label: 'Днів у вибірці', count: true },
+  { key: 'work_seconds', label: 'Загальний робочий час' },
+  { key: 'productive_seconds', label: 'Продуктивно', class: 'is-productive' },
+  { key: 'neutral_seconds', label: 'Нейтрально', class: 'is-neutral' },
+  { key: 'unproductive_seconds', label: 'Непродуктивно', class: 'is-bad' },
+  { key: 'lateness_seconds', label: 'Запізнення разом', class: 'is-bad' },
+].map((card) => ({
+  ...card,
+  value: card.count ? props.totals[card.key] : formatDuration(props.totals[card.key]),
+})));
 </script>
 
 <template>
-  <div class="totals-row">
-    <div v-for="card in cards" :key="card.label" class="total-card" :class="card.class">
-      <span class="total-label">{{ card.label }}</span>
-      <span class="total-value">{{ card.value }}</span>
+  <div class="chart-card panel" :class="{ 'is-loading': loading }">
+    <div class="chart-head">
+      <div class="chart-title">Підсумки періоду</div>
     </div>
+
+    <dl class="totals-list">
+      <div v-for="card in cards" :key="card.key" class="total-row" :class="card.class">
+        <dt class="total-label">{{ card.label }}</dt>
+        <dd class="total-value">{{ card.value }}</dd>
+      </div>
+    </dl>
   </div>
 </template>
 
+<style scoped src="./chart.css"></style>
 <style scoped>
-.totals-row {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 12px;
-  margin-top: 16px;
+.totals-list {
+  margin: 0;
 }
 
-.total-card {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 0;
-  padding: 12px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+.total-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.total-row:last-child {
+  border-bottom: 0;
 }
 
 .total-label {
-  font-size: 11.5px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted);
+  font-size: 13px;
+  color: var(--text-dim);
 }
 
 .total-value {
-  font-size: 20px;
+  margin: 0;
+  font-size: 17px;
   font-weight: 700;
   color: var(--accent);
   font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 
-.total-card.is-productive .total-value {
+.total-row.is-productive .total-value {
   color: #149d8d;
 }
 
-.total-card.is-unproductive .total-value {
+.total-row.is-bad .total-value {
   color: #d05353;
 }
 
-.total-card.is-neutral .total-value {
+.total-row.is-neutral .total-value {
   color: #8a8f98;
 }
 </style>

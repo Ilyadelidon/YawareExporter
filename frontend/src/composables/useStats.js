@@ -1,18 +1,20 @@
-import { reactive, ref } from 'vue';
+import { ref } from 'vue';
 import client from '../api/client';
 
 /**
- * Статистика по днях за період + ліниво довантажувана розбивка діяльностей
- * для розгорнутих рядків.
+ * Статистика за період: дні, підсумки, топ діяльностей і План.
  */
 export function useStats() {
   const stats = ref([]);
   const totals = ref(null);
+  // Фактичний період відповіді { date_from, date_to } — графіки будують дні саме з нього.
+  const period = ref(null);
+  // Топ діяльностей за період.
+  const topActivities = ref([]);
+  // План за період: { total, statuses, worked_tasks, worked_days, top }.
+  const plan = ref(null);
   const loading = ref(false);
   const error = ref('');
-
-  // Діяльності дня за id рядка статистики: { entries, error }; немає ключа — ще вантажиться.
-  const activities = reactive({});
 
   // Номер останнього запиту: відповідь за попередній період, що прийшла
   // пізніше, не має перезаписати новий.
@@ -27,8 +29,9 @@ export function useStats() {
       if (current !== requestId) return;
       stats.value = data.data;
       totals.value = data.totals;
-      // День міг перегенеруватись — кеш діяльностей скидаємо разом зі списком.
-      Object.keys(activities).forEach((key) => delete activities[key]);
+      period.value = data.period;
+      topActivities.value = data.activities;
+      plan.value = data.plan;
     } catch (e) {
       if (current !== requestId) return;
       error.value = e.response?.data?.message || 'Не вдалося завантажити статистику.';
@@ -37,22 +40,5 @@ export function useStats() {
     }
   }
 
-  async function loadActivities(stat) {
-    if (activities[stat.id]?.entries) return;
-    // Після помилки повторне розгортання пробує ще раз.
-    delete activities[stat.id];
-    try {
-      const { data } = await client.get('/stats/activities', {
-        params: { employee_id: stat.employee_id, date: stat.date },
-      });
-      activities[stat.id] = { entries: data.data, error: '' };
-    } catch (e) {
-      activities[stat.id] = {
-        entries: null,
-        error: e.response?.data?.message || 'Не вдалося завантажити діяльності.',
-      };
-    }
-  }
-
-  return { stats, totals, loading, error, activities, load, loadActivities };
+  return { stats, totals, period, topActivities, plan, loading, error, load };
 }

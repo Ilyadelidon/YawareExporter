@@ -1,0 +1,152 @@
+/* Спільний вигляд графіків Статистики. */
+.chart-card {
+  padding: 14px 16px 10px;
+  min-width: 0;
+  transition: opacity 0.2s ease;
+}
+
+/* Під час перезавантаження графік тримає попередній кадр, лише блідне. */
+.chart-card.is-loading {
+  opacity: 0.5;
+}
+
+.chart-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px 16px;
+  margin-bottom: 8px;
+}
+
+.chart-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #2b2f33;
+}
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.chart-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.line-key {
+  width: 14px;
+  height: 2px;
+  border-radius: 1px;
+}
+
+.chart-box {
+  position: relative;
+  min-height: 220px;
+}
+
+svg {
+  display: block;
+  overflow: visible;
+}
+
+svg text {
+  font-family: inherit;
+  font-size: 11px;
+  fill: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.grid line {
+  stroke: #e6eaee;
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+.is-dim {
+  opacity: 0.45;
+}
+
+.hit {
+  fill: transparent;
+  outline: none;
+}
+
+.hit:focus-visible {
+  fill: rgba(20, 157, 141, 0.06);
+}
+
+.crosshair {
+  stroke: #9aa1a9;
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+.chart-tooltip {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  pointer-events: none;
+  background: var(--surface);
+  border: 1px solid #e1e5ea;
+  box-shadow: var(--shadow-card);
+  padding: 8px 10px;
+  font-size: 12px;
+  min-width: 150px;
+  z-index: 2;
+}
+
+.tt-date {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.tt-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  line-height: 1.6;
+}
+
+.tt-row strong {
+  color: #2b2f33;
+  font-variant-numeric: tabular-nums;
+  min-width: 42px;
+}
+
+.tt-key {
+  width: 12px;
+  height: 2px;
+  border-radius: 1px;
+  flex: none;
+}
+
+.tt-label {
+  color: var(--text-dim);
+}
+
+.tt-total {
+  border-top: 1px solid var(--line);
+  margin-top: 2px;
+  padding-top: 2px;
+  padding-left: 20px;
+}
+
+.tt-empty {
+  color: var(--muted);
+}

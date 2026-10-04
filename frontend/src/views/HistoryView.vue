@@ -1,35 +1,62 @@
 <script setup>
-import { onMounted, ref } from 'vue';
-import DataTable from 'primevue/datatable';
-import Column from 'primevue/column';
+import { computed, onMounted, ref } from 'vue';
 import DatePicker from 'primevue/datepicker';
 import Select from 'primevue/select';
 import Message from 'primevue/message';
 import client from '../api/client';
 import UiIcon from '../components/UiIcon.vue';
 import StatsTotals from '../components/stats/StatsTotals.vue';
-import StatsDayActivities from '../components/stats/StatsDayActivities.vue';
+import SegmentedControl from '../components/integrations/SegmentedControl.vue';
+import StatsDailyChart from '../components/stats/StatsDailyChart.vue';
+import StatsTopActivities from '../components/stats/StatsTopActivities.vue';
+import StatsPlan from '../components/stats/StatsPlan.vue';
+import { dailySeries } from '../utils/statsCharts';
 import { useStats } from '../composables/useStats';
 import { useAuthStore } from '../stores/auth';
 import { toIsoDate } from '../utils/dates';
-import { formatDuration } from '../utils/duration';
 
 const auth = useAuthStore();
-const { stats, totals, loading, error, activities, load, loadActivities } = useStats();
+const { stats, totals, period, topActivities, plan, loading, error, load } = useStats();
 
 const today = new Date();
 const dateFrom = ref(new Date(today.getFullYear(), today.getMonth(), 1));
 const dateTo = ref(today);
+
+// Швидкі періоди. Тиждень — з понеділка; поточні тиждень і місяць — по сьогодні.
+const PRESETS = (() => {
+  const y = today.getFullYear();
+  const m = today.getMonth();
+  const monday = new Date(y, m, today.getDate() - ((today.getDay() + 6) % 7));
+  const lastMonday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() - 7);
+  const lastSunday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() - 1);
+  return [
+    { value: 'this_week', label: 'Цей тиждень', from: monday, to: today },
+    { value: 'last_week', label: 'Минулий тиждень', from: lastMonday, to: lastSunday },
+    { value: 'this_month', label: 'Цей місяць', from: new Date(y, m, 1), to: today },
+    { value: 'last_month', label: 'Минулий місяць', from: new Date(y, m - 1, 1), to: new Date(y, m, 0) },
+  ];
+})();
+
+// Підсвічуємо пресет, лише поки дати збігаються з ним; ручний вибір дат його знімає.
+const activePreset = computed(() => {
+  if (!dateFrom.value || !dateTo.value) return null;
+  const from = toIsoDate(dateFrom.value);
+  const to = toIsoDate(dateTo.value);
+  return PRESETS.find((p) => toIsoDate(p.from) === from && toIsoDate(p.to) === to)?.value ?? null;
+});
+
+function applyPreset(value) {
+  const preset = PRESETS.find((p) => p.value === value);
+  dateFrom.value = preset.from;
+  dateTo.value = preset.to;
+  loadStats();
+}
 const selectedEmployee = ref(null);
 const employees = ref([]);
-const expandedRows = ref({});
 
-// Колонки тривалостей: однаковий формат, відрізняються лише полем і заголовком.
-const durationColumns = [
-  { field: 'productive_seconds', header: 'Продуктивно' },
-  { field: 'unproductive_seconds', header: 'Непродуктивно' },
-  { field: 'neutral_seconds', header: 'Нейтрально' },
-];
+const dailyChart = computed(() => (period.value
+  ? dailySeries(stats.value, period.value.date_from, period.value.date_to)
+  : []));
 
 async function loadStats() {
   if (!dateFrom.value || !dateTo.value) {
@@ -39,7 +66,6 @@ async function loadStats() {
   if (auth.isAdmin && selectedEmployee.value) {
     params.employee_id = selectedEmployee.value;
   }
-  expandedRows.value = {};
   await load(params);
 }
 
@@ -97,52 +123,28 @@ onMounted(() => Promise.all([loadStats(), loadEmployees()]));
       {{ error }}
     </Message>
 
-    <StatsTotals v-if="totals" :totals="totals" />
+    <div class="presets-row">
+      <SegmentedControl
+        :model-value="activePreset"
+        :options="PRESETS"
+        :disabled="loading"
+        aria-label="Швидкий вибір періоду"
+        @update:model-value="applyPreset"
+      />
+    </div>
 
-    <div class="panel table-panel">
-      <DataTable
-        v-model:expanded-rows="expandedRows"
-        :value="stats"
-        :loading="loading"
-        paginator
-        :rows="31"
-        data-key="id"
-        @row-expand="loadActivities($event.data)"
-      >
-        <template #empty>
-          <div class="table-empty">
-            За обраний період даних немає. Статистика наповнюється під час генерації звітів — сформуйте звіт за потрібний день на вкладці «Звіти».
-          </div>
-        </template>
-        <Column expander style="width: 42px" />
-        <Column field="date" header="Дата" sortable>
-          <template #body="{ data }"><span class="date-value">{{ data.date }}</span></template>
-        </Column>
-        <Column v-if="auth.isAdmin" field="employee.name" header="Працівник" sortable />
-        <Column field="first_action" header="Перша дія">
-          <template #body="{ data }">{{ data.first_action || '—' }}</template>
-        </Column>
-        <Column field="last_action" header="Остання дія">
-          <template #body="{ data }">{{ data.last_action || '—' }}</template>
-        </Column>
-        <Column field="lateness_seconds" header="Запізнення" sortable>
-          <template #body="{ data }">
-            <span :class="{ 'lateness-value': data.lateness_seconds > 0 }">{{ formatDuration(data.lateness_seconds) }}</span>
-          </template>
-        </Column>
-        <Column v-for="col in durationColumns" :key="col.field" :field="col.field" :header="col.header" sortable>
-          <template #body="{ data }">{{ formatDuration(data[col.field]) }}</template>
-        </Column>
-        <Column field="total_seconds" header="Разом" sortable>
-          <template #body="{ data }">
-            <strong>{{ formatDuration(data.total_seconds) }}</strong>
-          </template>
-        </Column>
+    <div v-if="period && stats.length" class="charts-row">
+      <StatsDailyChart :days="dailyChart" :loading="loading" />
+      <StatsTotals v-if="totals" :totals="totals" :loading="loading" />
+    </div>
 
-        <template #expansion="{ data }">
-          <StatsDayActivities :state="activities[data.id]" />
-        </template>
-      </DataTable>
+    <div v-if="period && stats.length" class="charts-row is-even">
+      <StatsTopActivities :activities="topActivities" :loading="loading" />
+      <StatsPlan v-if="plan" :plan="plan" :show-employee="auth.isAdmin && !selectedEmployee" :loading="loading" />
+    </div>
+
+    <div v-if="period && !stats.length && !loading" class="panel empty-panel">
+      За обраний період даних немає. Статистика наповнюється під час генерації звітів — сформуйте звіт за потрібний день на вкладці «Звіти».
     </div>
   </div>
 </template>
@@ -157,34 +159,39 @@ onMounted(() => Promise.all([loadStats(), loadEmployees()]));
   margin-top: 14px;
 }
 
+.presets-row {
+  margin-top: 16px;
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.charts-row {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  gap: 12px;
+  margin-top: 16px;
+  animation: fadeUp 0.35s ease both;
+}
+
+.charts-row.is-even {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+@media (max-width: 1100px) {
+  .charts-row,
+  .charts-row.is-even {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .employee-select {
   min-width: 220px;
 }
 
-.table-panel {
+.empty-panel {
   margin-top: 16px;
-  overflow-x: auto;
-  animation: fadeUp 0.35s ease both;
-}
-
-/* На вузьких екранах таблиця скролиться в межах панелі, а не обрізається */
-.table-panel :deep(.p-datatable-table) {
-  min-width: 760px;
-}
-
-.table-empty {
-  padding: 10px 4px;
+  padding: 14px 16px;
   font-size: 13.5px;
   color: var(--muted);
-}
-
-.date-value {
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-
-.lateness-value {
-  color: #d05353;
-  font-weight: 600;
 }
 </style>
