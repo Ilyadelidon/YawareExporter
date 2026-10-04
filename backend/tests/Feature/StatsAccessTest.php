@@ -5,6 +5,8 @@ namespace Tests\Feature;
 use App\Models\ActivityEntry;
 use App\Models\DailyStat;
 use App\Models\Employee;
+use App\Models\PlanProject;
+use App\Models\PlanTask;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
@@ -73,6 +75,79 @@ class StatsAccessTest extends TestCase
             ->assertOk()
             ->assertJsonCount(1, 'data')
             ->assertJsonPath('data.0.employee_id', $second->id);
+    }
+
+    public function test_stats_include_top_activities(): void
+    {
+        $mine = $this->employee('a@example.com');
+        $theirs = $this->employee('b@example.com');
+        $entry = fn (Employee $employee, string $date, string $name, int $seconds) => ActivityEntry::create([
+            'employee_id' => $employee->id,
+            'date' => $date,
+            'name' => $name,
+            'productivity' => 'productive',
+            'duration_seconds' => $seconds,
+        ]);
+        $entry($mine, '2026-09-01', 'VS Code', 3000);
+        $entry($mine, '2026-09-02', 'VS Code', 2000);
+        $entry($mine, '2026-09-01', 'Figma', 600);
+        $entry($theirs, '2026-09-01', 'Excel', 9000);
+
+        Sanctum::actingAs($mine->user);
+
+        // Чужий Excel не потрапляє.
+        $this->getJson('/api/stats?date_from=2026-09-01&date_to=2026-09-30')
+            ->assertOk()
+            ->assertJsonCount(2, 'activities')
+            ->assertJsonPath('activities.0.name', 'VS Code')
+            ->assertJsonPath('activities.0.seconds', 5000);
+    }
+
+    public function test_stats_include_plan_for_period(): void
+    {
+        $mine = $this->employee('a@example.com');
+        $theirs = $this->employee('b@example.com');
+        $project = PlanProject::create(['name' => 'TumTum']);
+        $archived = PlanProject::create(['name' => 'Старий', 'archived_at' => now()]);
+        $planTask = fn (PlanProject $project, Employee $employee, string $title, string $status) => PlanTask::create([
+            'plan_project_id' => $project->id,
+            'employee_id' => $employee->id,
+            'title' => $title,
+            'status' => $status,
+        ]);
+
+        $planTask($project, $mine, 'Інтеграція', PlanTask::STATUS_IN_PROGRESS);
+        // Над «Інтеграцією» в періоді не працювали — у топ вона не потрапляє.
+        $marked = $planTask($project, $mine, 'Дизайн', PlanTask::STATUS_DONE);
+        $planTask($project, $mine, 'Бекапи', PlanTask::STATUS_PENDING);
+        // Архівний проект не входить у стан плану, але робота над ним у періоді видна.
+        $old = $planTask($archived, $mine, 'Старе', PlanTask::STATUS_PAUSED);
+        $planTask($project, $theirs, 'Чуже', PlanTask::STATUS_PENDING);
+
+        foreach (['2026-09-01', '2026-09-02', '2026-09-03'] as $date) {
+            $marked->days()->create(['date' => $date]);
+        }
+        $old->days()->create(['date' => '2026-09-04']);
+        // Відмітка поза періодом не рахується.
+        $marked->days()->create(['date' => '2026-08-20']);
+
+        Sanctum::actingAs($mine->user);
+
+        $this->getJson('/api/stats?date_from=2026-09-01&date_to=2026-09-30')
+            ->assertOk()
+            ->assertJsonPath('plan.total', 3)
+            ->assertJsonPath('plan.statuses', [
+                ['status' => PlanTask::STATUS_PENDING, 'label' => 'Очікує виконання', 'count' => 1],
+                ['status' => PlanTask::STATUS_IN_PROGRESS, 'label' => 'В роботі', 'count' => 1],
+                ['status' => PlanTask::STATUS_DONE, 'label' => 'Виконано', 'count' => 1],
+            ])
+            ->assertJsonPath('plan.worked_tasks', 2)
+            ->assertJsonPath('plan.worked_days', 4)
+            ->assertJsonCount(2, 'plan.top')
+            ->assertJsonPath('plan.top.0.title', 'Дизайн')
+            ->assertJsonPath('plan.top.0.days', 3)
+            ->assertJsonPath('plan.top.0.project', 'TumTum')
+            ->assertJsonPath('plan.top.1.title', 'Старе');
     }
 
     public function test_employee_cannot_open_someone_elses_activities(): void
