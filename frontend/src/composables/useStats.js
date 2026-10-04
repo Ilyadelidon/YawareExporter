@@ -11,7 +11,7 @@ export function useStats() {
   const period = ref(null);
   // Топ діяльностей за період.
   const topActivities = ref([]);
-  // Таски за період зі звітів: { total, seconds, lists, top }.
+  // Таски за період зі звітів: { total, seconds, top }.
   const tasks = ref(null);
   const loading = ref(false);
   const error = ref('');

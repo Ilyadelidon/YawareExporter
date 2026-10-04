@@ -1,13 +1,13 @@
 <script setup>
-// Таски за період зі звітів: скільки їх було і скільки часу на них пішло, у якій
-// колонці трекера кожна зараз і на які пішло найбільше часу.
+// Таски за період зі звітів: скільки їх було, скільки часу на них пішло і на які
+// пішло найбільше.
 import { computed } from 'vue';
 import StatsBarList from './StatsBarList.vue';
 import { CHART_SERIES } from './chartColors';
 import { formatDuration } from '../../utils/duration';
 
 const props = defineProps({
-  // { total, seconds, lists: [{ list, count }], top: [{ name, url, list, seconds, days, employees }] }
+  // { total, seconds, top: [{ name, url, seconds, days, employees }] }
   tasks: { type: Object, required: true },
   // Таски кількох працівників разом — біля назви показуємо, чия вона.
   showEmployee: { type: Boolean, default: false },
@@ -42,12 +42,6 @@ const items = computed(() => props.tasks.top.map((task, i) => ({
           <span class="figure-label">на таски разом</span>
         </div>
       </div>
-      <ul v-if="tasks.lists.length" class="statuses" aria-label="Таски за колонкою трекера">
-        <li v-for="row in tasks.lists" :key="row.list">
-          <span class="status-count">{{ row.count }}</span>
-          {{ row.list }}
-        </li>
-      </ul>
       <div class="part-title">Найбільше часу на таски</div>
       <StatsBarList :items="items" empty="У тасок за період немає часу." />
     </template>
@@ -61,7 +55,7 @@ const items = computed(() => props.tasks.top.map((task, i) => ({
   display: flex;
   flex-wrap: wrap;
   gap: 4px 24px;
-  margin-bottom: 8px;
+  margin-bottom: 14px;
 }
 
 .figure {
@@ -79,28 +73,6 @@ const items = computed(() => props.tasks.top.map((task, i) => ({
 .figure-label {
   font-size: 12.5px;
   color: var(--text-dim);
-}
-
-.statuses {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 0 0 14px;
-  padding: 0;
-  list-style: none;
-}
-
-.statuses li {
-  font-size: 12px;
-  color: var(--text-dim);
-  background: var(--line);
-  padding: 3px 8px;
-}
-
-.status-count {
-  font-weight: 700;
-  color: #2b2f33;
-  margin-right: 2px;
 }
 
 .part-title {

@@ -112,24 +112,23 @@ class StatsAccessTest extends TestCase
             'status' => $status,
             'tasks' => $tasks,
         ]);
-        $task = fn (string $name, string $list, string $start, string $due, ?string $url = null) => compact('name', 'list', 'start', 'due', 'url');
+        $task = fn (string $name, string $start, string $due, ?string $url = null) => compact('name', 'start', 'due', 'url');
 
         $report($mine, '2026-09-01', [
-            $task('Інтеграція', 'В роботі', '2026-09-01 09:00', '2026-09-01 11:00', 'https://trello.com/c/a'),
-            $task('Мітинг', 'Готово', '2026-09-01 11:00', '2026-09-01 11:30'),
+            $task('Інтеграція', '2026-09-01 09:00', '2026-09-01 11:00', 'https://trello.com/c/a'),
+            $task('Мітинг', '2026-09-01 11:00', '2026-09-01 11:30'),
         ]);
-        // Картку перейменували й пересунули — це та сама таска (те саме посилання),
-        // назва й колонка беруться з останнього знімка.
+        // Картку перейменували — це та сама таска (те саме посилання), назва береться остання.
         $report($mine, '2026-09-02', [
-            $task('Інтеграція з CRM', 'На перевірці', '2026-09-02 09:00', '2026-09-02 10:00', 'https://trello.com/c/a'),
-            $task('Мітинг', 'Готово', '2026-09-02 10:00', '2026-09-02 10:45'),
+            $task('Інтеграція з CRM', '2026-09-02 09:00', '2026-09-02 10:00', 'https://trello.com/c/a'),
+            $task('Мітинг', '2026-09-02 10:00', '2026-09-02 10:45'),
             // Таска без часу рахується в кількості, але не в топі за часом.
-            $task('Без часу', 'Готово', '', ''),
+            $task('Без часу', '', ''),
         ]);
         // Не готовий звіт, звіт поза періодом і чужий звіт не рахуються.
-        $report($mine, '2026-09-03', [$task('Збій', 'Готово', '2026-09-03 09:00', '2026-09-03 18:00')], Report::STATUS_FAILED);
-        $report($mine, '2026-08-31', [$task('Серпень', 'Готово', '2026-08-31 09:00', '2026-08-31 18:00')]);
-        $report($theirs, '2026-09-01', [$task('Чуже', 'Готово', '2026-09-01 09:00', '2026-09-01 18:00')]);
+        $report($mine, '2026-09-03', [$task('Збій', '2026-09-03 09:00', '2026-09-03 18:00')], Report::STATUS_FAILED);
+        $report($mine, '2026-08-31', [$task('Серпень', '2026-08-31 09:00', '2026-08-31 18:00')]);
+        $report($theirs, '2026-09-01', [$task('Чуже', '2026-09-01 09:00', '2026-09-01 18:00')]);
 
         Sanctum::actingAs($mine->user);
 
@@ -137,15 +136,10 @@ class StatsAccessTest extends TestCase
             ->assertOk()
             ->assertJsonPath('tasks.total', 3)
             ->assertJsonPath('tasks.seconds', 3 * 3600 + 75 * 60)
-            ->assertJsonPath('tasks.lists', [
-                ['list' => 'Готово', 'count' => 2],
-                ['list' => 'На перевірці', 'count' => 1],
-            ])
             ->assertJsonCount(2, 'tasks.top')
             ->assertJsonPath('tasks.top.0', [
                 'name' => 'Інтеграція з CRM',
                 'url' => 'https://trello.com/c/a',
-                'list' => 'На перевірці',
                 'seconds' => 3 * 3600,
                 'days' => 2,
                 'employees' => ['a@example.com'],
