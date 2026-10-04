@@ -62,3 +62,5 @@ Thumbs.db
 .idea/
 .vscode/
 *.tmp.mjs
+
+.claude/settings.local.json

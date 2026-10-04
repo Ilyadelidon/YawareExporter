@@ -70,6 +70,33 @@ const router = createRouter({
   routes,
 });
 
+// Після деплою старі чанки зникають, і вкладка, відкрита до нього, не може
+// підвантажити сторінку. Перезавантажуємо на цільову адресу, щоб узяти
+// свіжий index.html; позначка в sessionStorage не дає зациклитись.
+const RELOAD_FLAG = 'chunk-reload';
+
+router.onError((error, to) => {
+  const isChunkError = /Failed to fetch dynamically imported module|Importing a module script failed|error loading dynamically imported module/i
+    .test(error?.message ?? '');
+  if (!isChunkError) return;
+
+  try {
+    if (sessionStorage.getItem(RELOAD_FLAG)) return;
+    sessionStorage.setItem(RELOAD_FLAG, '1');
+  } catch {
+    // sessionStorage недоступний — все одно пробуємо один раз
+  }
+  window.location.assign(to.fullPath);
+});
+
+router.afterEach(() => {
+  try {
+    sessionStorage.removeItem(RELOAD_FLAG);
+  } catch {
+    // ігноруємо
+  }
+});
+
 router.beforeEach(async (to) => {
   const auth = useAuthStore();
 
