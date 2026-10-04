@@ -16,7 +16,7 @@ import { useAuthStore } from '../stores/auth';
 import { toIsoDate } from '../utils/dates';
 
 const auth = useAuthStore();
-const { stats, totals, period, topActivities, plan, loading, error, load } = useStats();
+const { stats, totals, period, topActivities, plan, reportTasks, loading, error, load } = useStats();
 
 const today = new Date();
 const dateFrom = ref(new Date(today.getFullYear(), today.getMonth(), 1));
@@ -140,7 +140,7 @@ onMounted(() => Promise.all([loadStats(), loadEmployees()]));
 
     <div v-if="period && stats.length" class="charts-row is-even">
       <StatsTopActivities :activities="topActivities" :loading="loading" />
-      <StatsPlan v-if="plan" :plan="plan" :show-employee="auth.isAdmin && !selectedEmployee" :loading="loading" />
+      <StatsPlan v-if="plan" :plan="plan" :tasks="reportTasks" :show-employee="auth.isAdmin && !selectedEmployee" :loading="loading" />
     </div>
 
     <div v-if="period && !stats.length && !loading" class="panel empty-panel">

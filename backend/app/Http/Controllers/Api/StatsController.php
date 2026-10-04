@@ -6,7 +6,9 @@ use App\Http\Controllers\Controller;
 use App\Models\ActivityEntry;
 use App\Models\DailyStat;
 use App\Models\PlanTask;
+use App\Models\Report;
 use App\Services\Stats\PeriodPlan;
+use App\Services\Stats\ReportTaskTime;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -38,7 +40,7 @@ class StatsController extends Controller
             ->orderBy('employee_id')
             ->get();
 
-        // Той самий фільтр для діяльностей і задач плану: працівник — лише свої, адмін — усі або обраний.
+        // Той самий фільтр для діяльностей, задач плану і звітів: працівник — лише свої, адмін — усі або обраний.
         $ownedBy = fn (Builder $query): Builder => $query->when(
             $user->isAdmin(),
             fn ($q) => $q->when(! empty($validated['employee_id']), fn ($q) => $q->where('employee_id', $validated['employee_id'])),
@@ -51,6 +53,13 @@ class StatsController extends Controller
             'period' => ['date_from' => $dateFrom, 'date_to' => $dateTo],
             'activities' => $this->topActivities($ownedBy(ActivityEntry::query()->whereBetween('date', [$dateFrom, $dateTo]))),
             'plan' => $this->periodPlan($ownedBy, $dateFrom, $dateTo),
+            'report_tasks' => (new ReportTaskTime)->top(
+                $ownedBy(Report::query())
+                    ->where('status', Report::STATUS_COMPLETED)
+                    ->whereBetween('report_date', [$dateFrom, $dateTo])
+                    ->with('employee:id,name')
+                    ->get(['id', 'employee_id', 'report_date', 'tasks']),
+            ),
         ]);
     }
 
@@ -86,7 +95,6 @@ class StatsController extends Controller
         $planTasks = $ownedBy(PlanTask::query())
             ->with([
                 'project:id,name,archived_at',
-                'employee:id,name',
                 'days' => fn ($query) => $query->whereBetween('date', [$from, $to]),
             ])
             ->get();

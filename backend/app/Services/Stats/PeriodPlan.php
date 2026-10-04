@@ -6,15 +6,13 @@ use App\Models\PlanTask;
 use Illuminate\Support\Collection;
 
 /**
- * План за період: у якому стані задачі плану зараз і над якими з них працювали
+ * План за період: у якому стані задачі плану зараз і скільки з них були в роботі
  * в періоді — за відмітками днів у Планах.
  */
 class PeriodPlan
 {
-    private const TOP = 8;
-
     /**
-     * @param  Collection<int, PlanTask>  $planTasks  задачі плану з project, employee і days лише за період
+     * @param  Collection<int, PlanTask>  $planTasks  задачі плану з project і days лише за період
      * @return array<string, mixed>
      */
     public function summarize(Collection $planTasks): array
@@ -23,16 +21,7 @@ class PeriodPlan
         $active = $planTasks->filter(fn (PlanTask $task) => $task->project && ! $task->project->archived_at);
         $counts = $active->countBy('status');
 
-        $worked = $planTasks
-            ->filter(fn (PlanTask $task) => $task->days->isNotEmpty())
-            ->map(fn (PlanTask $task) => [
-                'title' => $task->title,
-                'project' => $task->project?->name,
-                'employee' => $task->employee?->name,
-                'status' => $task->status,
-                'status_label' => PlanTask::STATUS_LABELS[$task->status] ?? $task->status,
-                'days' => $task->days->count(),
-            ]);
+        $worked = $planTasks->filter(fn (PlanTask $task) => $task->days->isNotEmpty());
 
         return [
             'total' => $active->count(),
@@ -42,8 +31,7 @@ class PeriodPlan
                 ->values()
                 ->all(),
             'worked_tasks' => $worked->count(),
-            'worked_days' => (int) $worked->sum('days'),
-            'top' => $worked->sortByDesc('days')->take(self::TOP)->values()->all(),
+            'worked_days' => (int) $worked->sum(fn (PlanTask $task) => $task->days->count()),
         ];
     }
 }

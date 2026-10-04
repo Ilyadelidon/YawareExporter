@@ -1,23 +1,28 @@
 <script setup>
-// План за період: стан задач плану зараз і над якими з них працювали (відмітки днів у Планах).
+// План за період: стан задач плану зараз, скільки з них були в роботі (відмітки днів у Планах)
+// і таски зі звітів, на які пішло найбільше часу.
 import { computed } from 'vue';
 import StatsBarList from './StatsBarList.vue';
 import { CHART_SERIES } from './chartColors';
+import { formatDuration } from '../../utils/duration';
 
 const props = defineProps({
-  // { total, statuses: [{ status, label, count }], worked_tasks, worked_days, top: [{ title, project, employee, status_label, days }] }
+  // { total, statuses: [{ status, label, count }], worked_tasks, worked_days }
   plan: { type: Object, required: true },
-  // Задачі кількох працівників разом — біля назви показуємо, чия вона.
+  // [{ name, url, seconds, days, employees }]
+  tasks: { type: Array, default: () => [] },
+  // Таски кількох працівників разом — біля назви показуємо, чия вона.
   showEmployee: { type: Boolean, default: false },
   loading: { type: Boolean, default: false },
 });
 
-const items = computed(() => props.plan.top.map((task, i) => ({
-  key: `${i}-${task.title}`,
-  name: task.title,
-  note: [task.project, task.status_label, props.showEmployee && task.employee].filter(Boolean).join(' · ') || null,
-  value: task.days,
-  display: `${task.days} дн.`,
+const items = computed(() => props.tasks.map((task, i) => ({
+  key: `${i}-${task.url ?? task.name}`,
+  name: task.name,
+  href: task.url,
+  note: [`${task.days} дн.`, props.showEmployee && task.employees.join(', ')].filter(Boolean).join(' · '),
+  value: task.seconds,
+  display: formatDuration(task.seconds),
   color: CHART_SERIES.productive.color,
 })));
 </script>
@@ -45,10 +50,11 @@ const items = computed(() => props.plan.top.map((task, i) => ({
           {{ row.label }}
         </li>
       </ul>
-      <div class="part-title">Найбільше днів роботи</div>
-      <StatsBarList :items="items" empty="За період у Планах не відмічено жодного дня роботи." />
     </template>
     <div v-else class="plan-empty">Задач у Планах немає.</div>
+
+    <div class="part-title">Найбільше часу на таски</div>
+    <StatsBarList :items="items" empty="За період у звітах немає тасок із часом." />
   </div>
 </template>
 
@@ -110,7 +116,7 @@ const items = computed(() => props.plan.top.map((task, i) => ({
 }
 
 .plan-empty {
-  padding: 18px 0;
+  padding: 2px 0 14px;
   font-size: 13px;
   color: var(--muted);
 }

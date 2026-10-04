@@ -2,7 +2,7 @@ import { ref } from 'vue';
 import client from '../api/client';
 
 /**
- * Статистика за період: дні, підсумки, топ діяльностей і План.
+ * Статистика за період: дні, підсумки, топ діяльностей, План і таски зі звітів.
  */
 export function useStats() {
   const stats = ref([]);
@@ -13,6 +13,8 @@ export function useStats() {
   const topActivities = ref([]);
   // План за період: { total, statuses, worked_tasks, worked_days, top }.
   const plan = ref(null);
+  // Таски зі звітів, на які пішло найбільше часу: [{ name, url, seconds, days, employees }].
+  const reportTasks = ref([]);
   const loading = ref(false);
   const error = ref('');
 
@@ -32,6 +34,7 @@ export function useStats() {
       period.value = data.period;
       topActivities.value = data.activities;
       plan.value = data.plan;
+      reportTasks.value = data.report_tasks;
     } catch (e) {
       if (current !== requestId) return;
       error.value = e.response?.data?.message || 'Не вдалося завантажити статистику.';
@@ -40,5 +43,5 @@ export function useStats() {
     }
   }
 
-  return { stats, totals, period, topActivities, plan, loading, error, load };
+  return { stats, totals, period, topActivities, plan, reportTasks, loading, error, load };
 }
