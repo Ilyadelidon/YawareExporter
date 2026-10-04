@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\VisibleToOwner;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
@@ -23,6 +24,8 @@ use Illuminate\Support\Collection;
 ])]
 class DailyStat extends Model
 {
+    use VisibleToOwner;
+
     protected function casts(): array
     {
         return [
@@ -67,16 +70,6 @@ class DailyStat extends Model
     public function scopeBetweenDates(Builder $query, string $from, string $to): void
     {
         $query->whereBetween('date', [$from, $to]);
-    }
-
-    /**
-     * Адміністратор бачить статистику всіх, працівник — лише свою.
-     */
-    public function scopeVisibleTo(Builder $query, User $user): void
-    {
-        if (! $user->isAdmin()) {
-            $query->whereRelation('employee', 'user_id', $user->id);
-        }
     }
 
     public function employee(): BelongsTo

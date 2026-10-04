@@ -7,10 +7,10 @@ use App\Models\ActivityEntry;
 use App\Models\DailyStat;
 use App\Models\Report;
 use App\Services\Stats\PeriodTasks;
+use App\Services\Stats\TopActivities;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Collection;
 
 class StatsController extends Controller
 {
@@ -25,60 +25,34 @@ class StatsController extends Controller
         $user = $request->user();
         $dateFrom = $validated['date_from'] ?? now()->startOfMonth()->toDateString();
         $dateTo = $validated['date_to'] ?? now()->toDateString();
+        // Фільтр по працівнику — лише для адміністратора: працівник і так бачить тільки себе.
+        $employeeId = $user->isAdmin() ? ($validated['employee_id'] ?? null) : null;
 
-        $stats = DailyStat::query()
-            ->betweenDates($dateFrom, $dateTo)
+        // Один фільтр для днів, діяльностей і звітів: працівник — лише свої, адмін — усі або обраний.
+        $scoped = fn (Builder $query): Builder => $query
             ->visibleTo($user)
-            // Фільтр по працівнику — лише для адміністратора: працівник і так бачить тільки себе.
-            ->when(
-                $user->isAdmin() && ! empty($validated['employee_id']),
-                fn ($query) => $query->where('employee_id', $validated['employee_id']),
-            )
+            ->when($employeeId, fn (Builder $q) => $q->where('employee_id', $employeeId));
+
+        $stats = $scoped(DailyStat::query()->betweenDates($dateFrom, $dateTo))
             ->orderBy('date')
             ->orderBy('employee_id')
             ->get();
-
-        // Той самий фільтр для діяльностей і звітів: працівник — лише свої, адмін — усі або обраний.
-        $ownedBy = fn (Builder $query): Builder => $query->when(
-            $user->isAdmin(),
-            fn ($q) => $q->when(! empty($validated['employee_id']), fn ($q) => $q->where('employee_id', $validated['employee_id'])),
-            fn ($q) => $q->whereRelation('employee', 'user_id', $user->id),
-        );
 
         return response()->json([
             'data' => $stats,
             'totals' => DailyStat::totals($stats),
             'period' => ['date_from' => $dateFrom, 'date_to' => $dateTo],
-            'activities' => $this->topActivities($ownedBy(ActivityEntry::query()->whereBetween('date', [$dateFrom, $dateTo]))),
+            'activities' => (new TopActivities)->summarize(
+                $scoped(ActivityEntry::query()->whereBetween('date', [$dateFrom, $dateTo])),
+            ),
             'tasks' => (new PeriodTasks)->summarize(
-                $ownedBy(Report::query())
+                $scoped(Report::query())
                     ->where('status', Report::STATUS_COMPLETED)
                     ->whereBetween('report_date', [$dateFrom, $dateTo])
                     ->with('employee:id,name')
                     ->get(['id', 'employee_id', 'report_date', 'tasks']),
             ),
         ]);
-    }
-
-    /**
-     * Топ діяльностей за період: сумарний час по назві.
-     *
-     * @return Collection<int, array<string, mixed>>
-     */
-    private function topActivities(Builder $query): Collection
-    {
-        return $query
-            ->selectRaw('name, productivity, MAX(category) as category, SUM(duration_seconds) as seconds')
-            ->groupBy('name', 'productivity')
-            ->orderByDesc('seconds')
-            ->limit(8)
-            ->get()
-            ->map(fn ($row) => [
-                'name' => $row->name,
-                'category' => $row->category,
-                'productivity' => $row->productivity,
-                'seconds' => (int) $row->seconds,
-            ]);
     }
 
     public function activities(Request $request): JsonResponse

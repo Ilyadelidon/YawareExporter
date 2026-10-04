@@ -3,8 +3,8 @@
 namespace App\Models;
 
 use App\Jobs\GenerateYawareReport;
+use App\Models\Concerns\VisibleToOwner;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
-use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -12,6 +12,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 #[Fillable(['employee_id', 'report_date', 'status', 'summary', 'tasks', 'error_message', 'generated_at'])]
 class Report extends Model
 {
+    use VisibleToOwner;
+
     public const STATUS_PENDING = 'pending';
 
     public const STATUS_PROCESSING = 'processing';
@@ -141,13 +143,6 @@ class Report extends Model
     public function isVisibleTo(User $user): bool
     {
         return $user->isAdmin() || $this->employee?->user_id === $user->id;
-    }
-
-    public function scopeVisibleTo(Builder $query, User $user): void
-    {
-        if (! $user->isAdmin()) {
-            $query->whereRelation('employee', 'user_id', $user->id);
-        }
     }
 
     public function employee(): BelongsTo
