@@ -2,15 +2,17 @@
 
 namespace App\Console\Commands;
 
+use App\Jobs\GenerateYawareReport;
 use App\Models\Employee;
 use App\Models\Report;
 use App\Services\GoogleSheetsService;
 use App\Services\OpsMonitor;
+use App\Services\Reports\DailyRunSummary;
 use App\Services\Tasks\TaskProviders;
-use App\Services\TelegramService;
 use Carbon\CarbonImmutable;
 use Carbon\Exceptions\InvalidFormatException;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Bus;
 
 class GenerateDailyReports extends Command
 {
@@ -31,7 +33,8 @@ class GenerateDailyReports extends Command
 
         $this->info("Автогенерація звітів за {$date}.");
 
-        $queued = 0;
+        $jobs = [];
+        $reportIds = [];
         $skipped = [];
 
         // whereNull поруч із active: `active` міг би підняти вхід у Yaware,
@@ -43,8 +46,8 @@ class GenerateDailyReports extends Command
 
         foreach ($employees as $employee) {
             if ($reason = $this->skipReason($employee)) {
-                $this->warn("{$employee->name} (#{$employee->id}): пропущено — {$reason}");
-                $skipped[] = "{$employee->name} (#{$employee->id}): {$reason}";
+                $this->warn("{$employee->label()}: пропущено — {$reason}");
+                $skipped[$employee->id] = $reason;
 
                 continue;
             }
@@ -54,57 +57,56 @@ class GenerateDailyReports extends Command
                 ['status' => Report::STATUS_PENDING],
             );
 
+            // У підсумок іде й звіт, який цей прогін не перезапускав: адміну
+            // потрібна повна картина дня, а не лише свіжі генерації.
+            $reportIds[] = $report->id;
+
             if (! $report->wasRecentlyCreated && $report->status !== Report::STATUS_FAILED) {
-                $this->line("{$employee->name} (#{$employee->id}): звіт #{$report->id} уже {$report->status} — пропущено.");
+                $this->line("{$employee->label()}: звіт #{$report->id} уже {$report->status} — пропущено.");
 
                 continue;
             }
 
             // Failed-звіт перезапускаємо: наступного ранку причина (Yaware/мережа)
             // могла зникнути.
-            $report->queueGeneration();
-            $this->line("{$employee->name} (#{$employee->id}): звіт #{$report->id} поставлено в чергу.");
-            $queued++;
+            $jobs[] = $report->generationJob();
+            $this->line("{$employee->label()}: звіт #{$report->id} поставлено в чергу.");
         }
 
-        $this->info("У чергу поставлено звітів: {$queued}.");
+        $this->info('У чергу поставлено звітів: '.count($jobs).'.');
 
         // Позначка для ops:healthcheck: без неї він за годину вирішить, що
         // ранкової автогенерації сьогодні не було.
         app(OpsMonitor::class)->recordDailyRun();
 
-        $this->notifyOps($date, $queued, $skipped);
+        $this->queueWithSummary($date, $jobs, $reportIds, $skipped);
 
         return self::SUCCESS;
     }
 
     /**
-     * Підсумок прогону розробнику в Telegram. Це водночас сигнал живості
-     * планувальника: повідомлення приходить щобудня, тож його відсутність
-     * і є ознакою, що cron або воркер лягли — інакше про це дізнаєшся
-     * від працівників, у яких не з'явився звіт.
+     * Звіти йдуть у чергу одним пакетом: коли воркер відпрацює останній,
+     * розробник отримає в Telegram підсумок, для кого звіт сформувався, а
+     * для кого ні (див. DailyRunSummary). allowFailures — щоб упалий звіт
+     * одного працівника не скасовував решту. Ставити нічого — підсумок одразу.
      *
-     * @param  list<string>  $skipped
+     * @param  list<GenerateYawareReport>  $jobs
+     * @param  list<int>  $reportIds
+     * @param  array<int, string>  $skipped  id працівника => причина пропуску
      */
-    private function notifyOps(string $date, int $queued, array $skipped): void
+    private function queueWithSummary(string $date, array $jobs, array $reportIds, array $skipped): void
     {
-        $day = CarbonImmutable::parse($date)->format('d.m.Y');
+        if ($jobs === []) {
+            app(DailyRunSummary::class)->send($date, $reportIds, $skipped);
 
-        $lines = ["🗓 Автогенерація звітів за {$day}", "У чергу поставлено: {$queued}"];
-
-        if ($skipped !== []) {
-            $lines[] = 'Пропущено: '.count($skipped);
-
-            foreach ($skipped as $reason) {
-                $lines[] = "• {$reason}";
-            }
+            return;
         }
 
-        if ($queued === 0 && $skipped === []) {
-            $lines[] = 'Активних працівників не знайдено — перевірте список працівників.';
-        }
-
-        app(TelegramService::class)->notifyOps(implode("\n", $lines));
+        Bus::batch($jobs)
+            ->name("reports:generate-daily {$date}")
+            ->allowFailures()
+            ->finally(static fn () => app(DailyRunSummary::class)->send($date, $reportIds, $skipped))
+            ->dispatch();
     }
 
     /**

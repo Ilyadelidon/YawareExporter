@@ -3,7 +3,9 @@
 namespace Tests\Feature;
 
 use App\Models\Employee;
+use App\Models\Report;
 use App\Models\User;
+use App\Services\Reports\DailyRunSummary;
 use App\Services\TelegramService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
@@ -135,8 +137,8 @@ class OpsNotificationTest extends TestCase
 
         $text = $messages[0]['text'];
         $this->assertStringContainsString('20.07.2026', $text);
-        $this->assertStringContainsString('У чергу поставлено: 0', $text);
-        $this->assertStringContainsString('Пропущено: 1', $text);
+        $this->assertStringNotContainsString('Сформовано', $text);
+        $this->assertStringContainsString('❌ Не сформовано: 1', $text);
         $this->assertStringContainsString('Петро', $text);
         $this->assertStringContainsString('кредів Yaware', $text);
     }
@@ -153,5 +155,58 @@ class OpsNotificationTest extends TestCase
             'Активних працівників не знайдено',
             $this->sentMessages()[0]['text'],
         );
+    }
+
+    public function test_daily_summary_lists_who_got_a_report_and_who_did_not(): void
+    {
+        $report = function (string $name, array $attributes) {
+            $employee = Employee::create(['name' => $name, 'email' => mb_strtolower($name).'@example.com', 'active' => true]);
+
+            return Report::create(['employee_id' => $employee->id, 'report_date' => '2026-09-30'] + $attributes)->id;
+        };
+
+        $ids = [
+            $report('Анна', [
+                'status' => Report::STATUS_COMPLETED,
+                'tasks' => [['name' => 'Таска']],
+                'summary' => [Report::SUMMARY_GOOGLE_SHEET => 'https://docs.google.com/x'],
+            ]),
+            $report('Борис', ['status' => Report::STATUS_FAILED, 'error_message' => 'Yaware не відповідає.']),
+            $report('Віра', ['status' => Report::STATUS_BLOCKED, 'error_message' => 'У дні є 40 хв робочого часу поза тасками.']),
+            $report('Гліб', ['status' => Report::STATUS_COMPLETED, 'tasks' => [], 'summary' => []]),
+            $report('Дана', [
+                'status' => Report::STATUS_COMPLETED,
+                'tasks' => [],
+                'summary' => [Report::SUMMARY_RESULT => Report::EMPTY_DAY_RESULT],
+            ]),
+        ];
+
+        $petro = Employee::create(['name' => 'Петро', 'email' => 'petro@example.com', 'active' => true]);
+
+        $text = app(DailyRunSummary::class)->text('2026-09-30', $ids, [$petro->id => 'немає кредів Yaware.']);
+
+        $this->assertStringContainsString('30.09.2026', $text);
+        $this->assertStringContainsString("✅ Сформовано: 2\n• Анна\n• Дана — день без активності", $text);
+        $this->assertStringNotContainsString('#', $text);
+        $this->assertStringContainsString('❌ Не сформовано: 4', $text);
+        $this->assertStringContainsString('Yaware не відповідає.', $text);
+        $this->assertStringContainsString('поза тасками', $text);
+        $this->assertStringContainsString('тасок за день немає', $text);
+        $this->assertStringContainsString('• Петро — немає кредів Yaware.', $text);
+    }
+
+    public function test_daily_summary_flags_a_report_the_queue_left_unfinished(): void
+    {
+        $employee = Employee::create(['name' => 'Анна', 'email' => 'anna@example.com', 'active' => true]);
+        $id = Report::create([
+            'employee_id' => $employee->id,
+            'report_date' => '2026-09-30',
+            'status' => Report::STATUS_PROCESSING,
+        ])->id;
+
+        $text = app(DailyRunSummary::class)->text('2026-09-30', [$id], []);
+
+        $this->assertStringContainsString('❌ Не сформовано: 1', $text);
+        $this->assertStringContainsString('генерація обірвалась', $text);
     }
 }

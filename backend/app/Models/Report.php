@@ -91,9 +91,18 @@ class Report extends Model
      */
     public function queueGeneration(): void
     {
+        dispatch($this->generationJob());
+    }
+
+    /**
+     * Скидає звіт у чергу і повертає джобу генерації, не ставлячи її —
+     * для тих, хто ставить кілька звітів одним пакетом.
+     */
+    public function generationJob(): GenerateYawareReport
+    {
         $this->markPending();
 
-        GenerateYawareReport::dispatch($this);
+        return new GenerateYawareReport($this);
     }
 
     public function markPending(): void

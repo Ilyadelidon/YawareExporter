@@ -11,6 +11,7 @@ use App\Services\Reports\YawareWorker;
 use App\Services\Reports\YawareWorkerException;
 use App\Services\ReportSheetPublisher;
 use App\Services\Tasks\TaskProviders;
+use Illuminate\Bus\Batchable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Log;
@@ -18,7 +19,7 @@ use Throwable;
 
 class GenerateYawareReport implements ShouldQueue
 {
-    use Queueable;
+    use Batchable, Queueable;
 
     public int $timeout = 660;
 
@@ -156,8 +157,11 @@ class GenerateYawareReport implements ShouldQueue
 
         // AI-розбір дня для адміністратора — окремою джобою в черзі analysis,
         // щоб довгий запит до моделі не тримав чергу звітів і не зривав
-        // готовий звіт при помилці.
-        if (app(AiAnalysisService::class)->isConfigured()) {
+        // готовий звіт при помилці. Адміністратор може вимкнути автозапуск у
+        // «Налаштуваннях» — тоді розбір лише вручну з панелі звіту.
+        $ai = app(AiAnalysisService::class);
+
+        if ($ai->autoEnabled() && $ai->isConfigured()) {
             GenerateDailyAnalysis::dispatch($report);
         }
     }

@@ -65,6 +65,15 @@ class Employee extends Model
         $this->update(['dismissed_at' => null]);
     }
 
+    /**
+     * Підпис у службових логах і повідомленнях: імена бувають однакові,
+     * тож id поруч.
+     */
+    public function label(): string
+    {
+        return "{$this->name} (#{$this->id})";
+    }
+
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
