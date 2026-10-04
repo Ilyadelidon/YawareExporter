@@ -2,6 +2,7 @@
 // Налаштування (лише адмін): командні інтеграції й сповіщення, які
 // налаштовуються один раз на всю команду, а не по кожному працівнику.
 import UiIcon from '../components/UiIcon.vue';
+import AiAnalysisRow from '../components/settings/AiAnalysisRow.vue';
 import AlertEmailsRow from '../components/settings/AlertEmailsRow.vue';
 import BitrixWorkspaceRow from '../components/settings/BitrixWorkspaceRow.vue';
 import OpsTelegramRow from '../components/settings/OpsTelegramRow.vue';
@@ -16,7 +17,7 @@ import OpsTelegramRow from '../components/settings/OpsTelegramRow.vue';
         </div>
         <div>
           <div class="page-head-title">Налаштування</div>
-          <div class="page-head-subtitle">Таск-трекер команди, сповіщення керівнику й технічні сповіщення</div>
+          <div class="page-head-subtitle">Таск-трекер команди, AI-розбір, сповіщення керівнику й технічні сповіщення</div>
         </div>
       </div>
     </div>
@@ -24,6 +25,9 @@ import OpsTelegramRow from '../components/settings/OpsTelegramRow.vue';
     <div class="settings-stack">
       <!-- Командні налаштування трекера: портал Бітрікса один на всіх працівників -->
       <BitrixWorkspaceRow />
+
+      <!-- Чи запускати AI-розбір дня після кожного звіту -->
+      <AiAnalysisRow />
 
       <!-- Куди керівнику писати про критичні порушення з AI-розбору дня -->
       <AlertEmailsRow />

@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\AiAnalysisController;
+use App\Http\Controllers\Api\AiSettingsController;
 use App\Http\Controllers\Api\AlertSettingsController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\BitrixAccountController;
@@ -120,6 +121,8 @@ Route::middleware(['auth:sanctum', 'not-dismissed'])->group(function () {
         // AI-розбір дня бачить лише адміністратор.
         Route::get('/analysis', [AiAnalysisController::class, 'show']);
         Route::post('/analysis', [AiAnalysisController::class, 'store']);
+        Route::get('/analysis/settings', [AiSettingsController::class, 'show']);
+        Route::put('/analysis/settings', [AiSettingsController::class, 'update']);
 
         // Пошти, на які керівнику йдуть листи про критичні порушення.
         Route::get('/alerts/emails', [AlertSettingsController::class, 'show']);

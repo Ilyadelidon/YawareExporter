@@ -10,6 +10,9 @@ class AppSetting extends Model
 {
     public const PLANS_SPREADSHEET_ID = 'plans.google_spreadsheet_id';
 
+    /** '0' — AI-розбір після звітів вимкнено; немає запису — увімкнено. */
+    public const AI_AUTO_ANALYSIS = 'ai.auto_analysis';
+
     protected $primaryKey = 'key';
 
     protected $keyType = 'string';

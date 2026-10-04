@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\ActivityEntry;
+use App\Models\AppSetting;
 use App\Models\DailyStat;
 use App\Models\Report;
 use App\Services\Ai\AnalysisProvider;
@@ -71,6 +72,21 @@ class AiAnalysisService
     public function isConfigured(?string $name = null): bool
     {
         return $this->provider($name)->isConfigured();
+    }
+
+    /**
+     * Чи ставити розбір у чергу автоматично після кожного готового звіту.
+     * Ручний запуск з панелі звіту від цього не залежить.
+     */
+    public function autoEnabled(): bool
+    {
+        return AppSetting::get(AppSetting::AI_AUTO_ANALYSIS) !== '0';
+    }
+
+    public function setAutoEnabled(bool $enabled): void
+    {
+        // Увімкнено — стан за замовчуванням, тож запис лишаємо лише для «вимкнено».
+        AppSetting::put(AppSetting::AI_AUTO_ANALYSIS, $enabled ? null : '0');
     }
 
     /**

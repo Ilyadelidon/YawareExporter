@@ -4,10 +4,12 @@ namespace Tests\Feature;
 
 use App\Jobs\GenerateDailyAnalysis;
 use App\Models\ActivityEntry;
+use App\Models\AppSetting;
 use App\Models\DailyAnalysis;
 use App\Models\Employee;
 use App\Models\Report;
 use App\Models\User;
+use App\Services\AiAnalysisService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
@@ -315,5 +317,52 @@ class AiAnalysisTest extends TestCase
         ])->assertStatus(422);
 
         Queue::assertNothingPushed();
+    }
+
+    public function test_admin_toggles_auto_analysis(): void
+    {
+        Sanctum::actingAs($this->admin());
+
+        // За замовчуванням розбір іде після кожного звіту.
+        $this->getJson('/api/analysis/settings')
+            ->assertOk()
+            ->assertJsonPath('auto_analysis', true);
+
+        $this->putJson('/api/analysis/settings', ['auto_analysis' => false])
+            ->assertOk()
+            ->assertJsonPath('auto_analysis', false);
+
+        $this->assertFalse(app(AiAnalysisService::class)->autoEnabled());
+
+        $this->putJson('/api/analysis/settings', ['auto_analysis' => true])
+            ->assertOk()
+            ->assertJsonPath('auto_analysis', true);
+
+        $this->assertNull(AppSetting::get(AppSetting::AI_AUTO_ANALYSIS));
+    }
+
+    public function test_employee_cannot_toggle_auto_analysis(): void
+    {
+        Sanctum::actingAs(User::factory()->create(['role' => User::ROLE_EMPLOYEE]));
+
+        $this->getJson('/api/analysis/settings')->assertForbidden();
+        $this->putJson('/api/analysis/settings', ['auto_analysis' => false])->assertForbidden();
+    }
+
+    public function test_manual_analysis_works_with_auto_disabled(): void
+    {
+        Queue::fake();
+
+        app(AiAnalysisService::class)->setAutoEnabled(false);
+
+        $employee = $this->employee();
+        $this->completedReport($employee);
+
+        Sanctum::actingAs($this->admin());
+
+        $this->postJson('/api/analysis', ['employee_id' => $employee->id, 'date' => '2026-07-20'])
+            ->assertStatus(202);
+
+        Queue::assertPushed(GenerateDailyAnalysis::class);
     }
 }
