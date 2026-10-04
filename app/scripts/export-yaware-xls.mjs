@@ -2418,14 +2418,21 @@ with tempfile.TemporaryDirectory() as temp_directory:
         def row_owner_index(row_start, row_end):
             # Рядок активності належить тасці з найбільшим перекриттям; якщо він не
             # потрапляє в жодне вікно — це час поза тасками (-1).
+            # Час у рядках — з точністю до хвилини, тож дія на кілька секунд має
+            # start == end. Така точка на стику двох тасок (вікно попередньої
+            # закінчується там, де починається наступна) потрапляє в обидва вікна —
+            # віддаємо її пізнішій тасці: дія, що почалась у момент старту таски,
+            # належить їй. Інакше після перерви ці рядки ставали окремим блоком
+            # 00:00:00 попередньої таски, відірваним від блоку наступної.
+            point_row = row_end <= row_start
             best_index = -1
             best_overlap = 0.0
             for index, task in enumerate(tasks):
-                if row_end > row_start:
+                if not point_row:
                     overlap = min(row_end, task['window_end']) - max(row_start, task['start'])
                 else:
                     overlap = 1.0 if task['start'] <= row_start <= task['window_end'] else 0.0
-                if overlap > best_overlap:
+                if overlap > best_overlap or (point_row and overlap > 0 and overlap == best_overlap):
                     best_index = index
                     best_overlap = overlap
             return best_index
