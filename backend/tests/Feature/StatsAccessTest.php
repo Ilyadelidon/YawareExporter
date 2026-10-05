@@ -5,6 +5,9 @@ namespace Tests\Feature;
 use App\Models\ActivityEntry;
 use App\Models\DailyStat;
 use App\Models\Employee;
+use App\Models\PlanProject;
+use App\Models\PlanTask;
+use App\Models\PlanTaskDay;
 use App\Models\Report;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -146,6 +149,43 @@ class StatsAccessTest extends TestCase
             ])
             ->assertJsonPath('tasks.top.1.name', 'Мітинг')
             ->assertJsonPath('tasks.top.1.seconds', 75 * 60);
+    }
+
+    public function test_stats_include_plan_tasks_worked_in_period(): void
+    {
+        $mine = $this->employee('a@example.com');
+        $theirs = $this->employee('b@example.com');
+        $project = PlanProject::create(['name' => 'TumTum']);
+        $task = function (Employee $employee, string $title, array $dates, string $status = PlanTask::STATUS_IN_PROGRESS) use ($project) {
+            $task = $project->tasks()->create(['employee_id' => $employee->id, 'title' => $title, 'status' => $status]);
+            foreach ($dates as $date) {
+                PlanTaskDay::create(['plan_task_id' => $task->id, 'date' => $date]);
+            }
+        };
+
+        $task($mine, 'Інтеграція', ['2026-09-01', '2026-09-02', '2026-09-03']);
+        // Відмітка поза періодом не рахується.
+        $task($mine, 'Звіт', ['2026-09-10', '2026-08-31'], PlanTask::STATUS_DONE);
+        // Задача без відміток у періоді і чужа задача не потрапляють.
+        $task($mine, 'Серпень', ['2026-08-20']);
+        $task($theirs, 'Чуже', ['2026-09-05']);
+
+        Sanctum::actingAs($mine->user);
+
+        $this->getJson('/api/stats?date_from=2026-09-01&date_to=2026-09-30')
+            ->assertOk()
+            ->assertJsonPath('plan_tasks.total', 2)
+            ->assertJsonPath('plan_tasks.days', 4)
+            ->assertJsonCount(2, 'plan_tasks.top')
+            ->assertJsonPath('plan_tasks.top.0', [
+                'name' => 'Інтеграція',
+                'project' => 'TumTum',
+                'status' => 'В роботі',
+                'days' => 3,
+                'employee' => 'a@example.com',
+            ])
+            ->assertJsonPath('plan_tasks.top.1.name', 'Звіт')
+            ->assertJsonPath('plan_tasks.top.1.days', 1);
     }
 
     public function test_employee_cannot_open_someone_elses_activities(): void

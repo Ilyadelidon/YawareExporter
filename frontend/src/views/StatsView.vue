@@ -9,13 +9,14 @@ import StatsTotals from '../components/stats/StatsTotals.vue';
 import StatsDailyChart from '../components/stats/StatsDailyChart.vue';
 import StatsTopActivities from '../components/stats/StatsTopActivities.vue';
 import StatsTasks from '../components/stats/StatsTasks.vue';
+import StatsPlanTasks from '../components/stats/StatsPlanTasks.vue';
 import { dailySeries } from '../utils/statsCharts';
 import { useStats } from '../composables/useStats';
 import { useAuthStore } from '../stores/auth';
 import { toIsoDate } from '../utils/dates';
 
 const auth = useAuthStore();
-const { stats, totals, period, topActivities, tasks, loading, error, load } = useStats();
+const { stats, totals, period, topActivities, tasks, planTasks, loading, error, load } = useStats();
 
 const selectedMonth = ref(new Date());
 const selectedEmployee = ref(null);
@@ -98,8 +99,12 @@ onMounted(() => Promise.all([loadStats(), loadEmployees()]));
     </div>
 
     <div v-if="hasData" class="charts-row is-even">
-      <StatsTopActivities :activities="topActivities" :loading="loading" />
       <StatsTasks v-if="tasks" :tasks="tasks" :show-employee="auth.isAdmin && !selectedEmployee" :loading="loading" />
+      <StatsPlanTasks v-if="planTasks" :tasks="planTasks" :show-employee="auth.isAdmin && !selectedEmployee" :loading="loading" />
+    </div>
+
+    <div v-if="hasData" class="charts-row is-full">
+      <StatsTopActivities :activities="topActivities" :loading="loading" />
     </div>
 
     <div v-if="period && !hasData && !loading" class="panel empty-panel">
@@ -128,6 +133,10 @@ onMounted(() => Promise.all([loadStats(), loadEmployees()]));
 
 .charts-row.is-even {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.charts-row.is-full {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 @media (max-width: 1100px) {

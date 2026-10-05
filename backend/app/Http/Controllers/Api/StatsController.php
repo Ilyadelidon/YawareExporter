@@ -5,7 +5,9 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\ActivityEntry;
 use App\Models\DailyStat;
+use App\Models\PlanTask;
 use App\Models\Report;
+use App\Services\Stats\PeriodPlanTasks;
 use App\Services\Stats\PeriodTasks;
 use App\Services\Stats\TopActivities;
 use Illuminate\Database\Eloquent\Builder;
@@ -28,7 +30,7 @@ class StatsController extends Controller
         // Фільтр по працівнику — лише для адміністратора: працівник і так бачить тільки себе.
         $employeeId = $user->isAdmin() ? ($validated['employee_id'] ?? null) : null;
 
-        // Один фільтр для днів, діяльностей і звітів: працівник — лише свої, адмін — усі або обраний.
+        // Один фільтр для днів, діяльностей, звітів і задач плану: працівник — лише свої, адмін — усі або обраний.
         $scoped = fn (Builder $query): Builder => $query
             ->visibleTo($user)
             ->when($employeeId, fn (Builder $q) => $q->where('employee_id', $employeeId));
@@ -51,6 +53,16 @@ class StatsController extends Controller
                     ->whereBetween('report_date', [$dateFrom, $dateTo])
                     ->with('employee:id,name')
                     ->get(['id', 'employee_id', 'report_date', 'tasks']),
+            ),
+            'plan_tasks' => (new PeriodPlanTasks)->summarize(
+                $scoped(PlanTask::query())
+                    ->whereHas('days', fn (Builder $q) => $q->whereBetween('date', [$dateFrom, $dateTo]))
+                    ->with([
+                        'days' => fn ($q) => $q->whereBetween('date', [$dateFrom, $dateTo]),
+                        'project:id,name',
+                        'employee:id,name',
+                    ])
+                    ->get(),
             ),
         ]);
     }

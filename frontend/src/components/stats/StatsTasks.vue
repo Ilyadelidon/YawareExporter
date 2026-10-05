@@ -45,48 +45,9 @@ const items = computed(() => props.tasks.top.map((task, i) => ({
       <div class="part-title">Найбільше часу на таски</div>
       <StatsBarList :items="items" empty="У тасок за період немає часу." />
     </template>
-    <div v-else class="tasks-empty">За період у звітах немає тасок.</div>
+    <div v-else class="figures-empty">За період у звітах немає тасок.</div>
   </div>
 </template>
 
 <style scoped src="./chart.css"></style>
-<style scoped>
-.figures {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 24px;
-  margin-bottom: 14px;
-}
-
-.figure {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-}
-
-.figure-value {
-  font-size: 22px;
-  font-weight: 700;
-  color: #2b2f33;
-}
-
-.figure-label {
-  font-size: 12.5px;
-  color: var(--text-dim);
-}
-
-.part-title {
-  font-size: 11.5px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted);
-  margin-bottom: 6px;
-}
-
-.tasks-empty {
-  padding: 18px 0;
-  font-size: 13px;
-  color: var(--muted);
-}
-</style>
+<style scoped src="./figures.css"></style>
