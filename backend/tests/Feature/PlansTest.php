@@ -234,6 +234,21 @@ class PlansTest extends TestCase
         $this->assertNull($ivan->fresh()->current_plan_task_id);
     }
 
+    public function test_current_moves_review_task_to_in_progress_but_keeps_recurring(): void
+    {
+        $ivan = $this->employee('Іван Петренко');
+        $tumtum = $this->project('TumTum', $ivan);
+        $review = $this->task($tumtum, $ivan, 'Коментарі');
+        $review->update(['status' => 'review']);
+        $recurring = $this->task($tumtum, $ivan, 'Щотижневий звіт');
+        $recurring->update(['status' => 'recurring']);
+
+        Sanctum::actingAs($ivan->user);
+
+        $this->putJson("/api/plans/tasks/{$review->id}/current")->assertOk()->assertJsonPath('data.status', 'in_progress');
+        $this->putJson("/api/plans/tasks/{$recurring->id}/current")->assertOk()->assertJsonPath('data.status', 'recurring');
+    }
+
     public function test_admin_cannot_assign_task_to_non_member(): void
     {
         $ivan = $this->employee('Іван Петренко');

@@ -150,7 +150,8 @@ class PlanTaskController extends Controller
 
     /**
      * «Працюю зараз»: одна задача на людину. Заразом відмічає сьогоднішній
-     * день і, якщо задача ще не була в роботі, переводить її в «В роботі».
+     * день і переводить задачу в «В роботі» з будь-якого статусу, крім
+     * «Регулярна» — та лишається регулярною.
      */
     public function setCurrent(Request $request, PlanTask $task): JsonResponse
     {
@@ -163,7 +164,7 @@ class PlanTaskController extends Controller
 
             PlanTaskDay::firstOrCreate(['plan_task_id' => $task->id, 'date' => now()->toDateString()]);
 
-            if (in_array($task->status, [PlanTask::STATUS_PENDING, ...PlanTask::INACTIVE_STATUSES], true)) {
+            if (! in_array($task->status, [PlanTask::STATUS_IN_PROGRESS, PlanTask::STATUS_RECURRING], true)) {
                 $task->update(['status' => PlanTask::STATUS_IN_PROGRESS]);
                 $statusChanged = true;
             }
