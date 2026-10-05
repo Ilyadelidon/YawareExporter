@@ -1,17 +1,15 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import DatePicker from 'primevue/datepicker';
 import Select from 'primevue/select';
 import Message from 'primevue/message';
 import client from '../api/client';
 import UiIcon from '../components/UiIcon.vue';
-import SegmentedControl from '../components/integrations/SegmentedControl.vue';
 import StatsTotals from '../components/stats/StatsTotals.vue';
 import StatsDailyChart from '../components/stats/StatsDailyChart.vue';
 import StatsTopActivities from '../components/stats/StatsTopActivities.vue';
 import StatsTasks from '../components/stats/StatsTasks.vue';
 import { dailySeries } from '../utils/statsCharts';
-import { matchPreset, periodPresets } from '../utils/statsPresets';
 import { useStats } from '../composables/useStats';
 import { useAuthStore } from '../stores/auth';
 import { toIsoDate } from '../utils/dates';
@@ -19,22 +17,9 @@ import { toIsoDate } from '../utils/dates';
 const auth = useAuthStore();
 const { stats, totals, period, topActivities, tasks, loading, error, load } = useStats();
 
-const today = new Date();
-const dateFrom = ref(new Date(today.getFullYear(), today.getMonth(), 1));
-const dateTo = ref(today);
+const selectedMonth = ref(new Date());
 const selectedEmployee = ref(null);
 const employees = ref([]);
-
-const PRESETS = periodPresets(today);
-// Підсвічуємо пресет, лише поки дати збігаються з ним.
-const activePreset = computed(() => matchPreset(PRESETS, dateFrom.value, dateTo.value));
-
-function applyPreset(value) {
-  const preset = PRESETS.find((p) => p.value === value);
-  dateFrom.value = preset.from;
-  dateTo.value = preset.to;
-  loadStats();
-}
 
 const hasData = computed(() => Boolean(period.value && stats.value.length));
 const dailyChart = computed(() => (period.value
@@ -42,10 +27,17 @@ const dailyChart = computed(() => (period.value
   : []));
 
 async function loadStats() {
-  if (!dateFrom.value || !dateTo.value) {
+  const month = selectedMonth.value;
+  if (!month) {
     return;
   }
-  const params = { date_from: toIsoDate(dateFrom.value), date_to: toIsoDate(dateTo.value) };
+  // Поточний місяць — по сьогодні, минулі — цілком.
+  const today = new Date();
+  const monthEnd = new Date(month.getFullYear(), month.getMonth() + 1, 0);
+  const params = {
+    date_from: toIsoDate(new Date(month.getFullYear(), month.getMonth(), 1)),
+    date_to: toIsoDate(monthEnd < today ? monthEnd : today),
+  };
   if (auth.isAdmin && selectedEmployee.value) {
     params.employee_id = selectedEmployee.value;
   }
@@ -59,6 +51,8 @@ async function loadEmployees() {
   const { data } = await client.get('/employees');
   employees.value = data.data;
 }
+
+watch([selectedMonth, selectedEmployee], loadStats);
 
 onMounted(() => Promise.all([loadStats(), loadEmployees()]));
 </script>
@@ -89,32 +83,14 @@ onMounted(() => Promise.all([loadStats(), loadEmployees()]));
         />
         <div class="field-pill">
           <UiIcon name="calendar" :size="15" color="var(--accent)" />
-          <DatePicker v-model="dateFrom" date-format="dd.mm.yy" :manual-input="false" select-other-months />
+          <DatePicker v-model="selectedMonth" view="month" date-format="mm.yy" :manual-input="false" />
         </div>
-        <div class="field-pill">
-          <UiIcon name="calendar" :size="15" color="var(--accent)" />
-          <DatePicker v-model="dateTo" date-format="dd.mm.yy" :manual-input="false" select-other-months />
-        </div>
-        <button class="btn-accent" type="button" :disabled="loading" @click="loadStats">
-          <UiIcon name="search" :stroke-width="2.5" />
-          Показати
-        </button>
       </div>
     </div>
 
     <Message v-if="error" severity="error" :closable="true" class="page-message" @close="error = ''">
       {{ error }}
     </Message>
-
-    <div class="presets-row">
-      <SegmentedControl
-        :model-value="activePreset"
-        :options="PRESETS"
-        :disabled="loading"
-        aria-label="Швидкий вибір періоду"
-        @update:model-value="applyPreset"
-      />
-    </div>
 
     <div v-if="hasData" class="charts-row">
       <StatsDailyChart :days="dailyChart" :loading="loading" />
@@ -140,12 +116,6 @@ onMounted(() => Promise.all([loadStats(), loadEmployees()]));
 
 .page-message {
   margin-top: 14px;
-}
-
-.presets-row {
-  margin-top: 16px;
-  display: flex;
-  flex-wrap: wrap;
 }
 
 .charts-row {
