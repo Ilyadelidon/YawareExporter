@@ -637,7 +637,7 @@ class GoogleSheetsService
 
         $data = [];
 
-        foreach ($dayTasks as $taskName => $dayRow) {
+        foreach ($dayTasks as $taskName => $dayRows) {
             $row = $existingRows[$taskName] ?? null;
 
             if ($row === null) {
@@ -658,9 +658,16 @@ class GoogleSheetsService
                 }
             }
 
+            // Кілька карток з однаковою назвою за день (робота над таскою
+            // кількома проміжками) — один рядок місяця з сумою всіх.
+            $references = array_map(
+                fn (int $dayRow) => "'{$dayTitle}'!".self::DAY_TASK_TIME_COLUMN.$dayRow,
+                $dayRows,
+            );
+
             $data[] = [
                 'range' => "'{$monthTitle}'!{$dateColumnLetter}{$row}",
-                'values' => [["='{$dayTitle}'!".self::DAY_TASK_TIME_COLUMN.$dayRow]],
+                'values' => [['='.implode('+', $references)]],
             ];
         }
 
@@ -690,9 +697,11 @@ class GoogleSheetsService
     }
 
     /**
-     * Таски з таблиці денної вкладки: назва → номер рядка (для формул часу).
+     * Таски з таблиці денної вкладки: назва → номери рядків (для формул часу).
+     * Однакова назва може стояти в кількох рядках — тоді рядків кілька, а не
+     * лише останній: інакше час решти карток випадав з місячного аркуша.
      *
-     * @return array<string, int>
+     * @return array<string, array<int, int>>
      */
     private function dayTaskRows(string $spreadsheetId, string $dayTitle): array
     {
@@ -718,7 +727,7 @@ class GoogleSheetsService
                 break;
             }
 
-            $tasks[$name] = $firstRow + $offset;
+            $tasks[$name][] = $firstRow + $offset;
         }
 
         return $tasks;

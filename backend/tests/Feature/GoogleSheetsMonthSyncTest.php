@@ -151,6 +151,50 @@ class GoogleSheetsMonthSyncTest extends TestCase
         });
     }
 
+    public function test_same_task_name_in_several_day_rows_is_summed(): void
+    {
+        $grid = $this->grid(false);
+
+        Http::fake(function (Request $request) use ($grid) {
+            $url = urldecode($request->url());
+
+            // Таска А — дві картки за день (рядки 8 і 10), між ними таска Б.
+            if ($request->method() === 'GET' && str_contains($url, "'24.07.2026'!V8")) {
+                return Http::response(['values' => [['Таска А'], ['Таска Б'], ['Таска А'], ['Час разом']]]);
+            }
+
+            if ($request->method() === 'GET' && str_contains($url, 'fields=sheets.properties')) {
+                return Http::response(['sheets' => [
+                    ['properties' => ['sheetId' => 7, 'index' => 0, 'title' => self::MONTH_TITLE]],
+                ]]);
+            }
+
+            if ($request->method() === 'GET' && str_contains($url, "'".self::MONTH_TITLE."'!A1:AZ")) {
+                return Http::response(['values' => $grid]);
+            }
+
+            return Http::response([]);
+        });
+
+        (new GoogleSheetsService(self::SPREADSHEET_ID))
+            ->syncMonthSheet('24.07.2026', CarbonImmutable::parse('2026-07-24'));
+
+        Http::assertSent(function (Request $request) {
+            if (! str_contains($request->url(), 'values:batchUpdate')) {
+                return false;
+            }
+
+            $ranges = collect($request->data()['data'])->keyBy('range')
+                ->map(fn (array $entry) => $entry['values'][0][0]);
+
+            return $ranges["'".self::MONTH_TITLE."'!C2"] === 'Таска А'
+                && $ranges["'".self::MONTH_TITLE."'!E2"] === "='24.07.2026'!X8+'24.07.2026'!X10"
+                && $ranges["'".self::MONTH_TITLE."'!C3"] === 'Таска Б'
+                && $ranges["'".self::MONTH_TITLE."'!E3"] === "='24.07.2026'!X9"
+                && ! $ranges->has("'".self::MONTH_TITLE."'!C4");
+        });
+    }
+
     public function test_totals_cover_rows_inserted_above_them(): void
     {
         $grid = $this->grid(false);
