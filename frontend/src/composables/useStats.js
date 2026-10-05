@@ -13,7 +13,7 @@ export function useStats() {
   const topActivities = ref([]);
   // Таски за період зі звітів: { total, seconds, top }.
   const tasks = ref(null);
-  // Задачі з плану за період: { total, days, top }.
+  // Задачі з плану за період: { total, done, review, top }.
   const planTasks = ref(null);
   const loading = ref(false);
   const error = ref('');

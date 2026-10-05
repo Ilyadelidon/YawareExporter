@@ -166,17 +166,19 @@ class StatsAccessTest extends TestCase
         $task($mine, 'Інтеграція', ['2026-09-01', '2026-09-02', '2026-09-03']);
         // Відмітка поза періодом не рахується.
         $task($mine, 'Звіт', ['2026-09-10', '2026-08-31'], PlanTask::STATUS_DONE);
+        $task($mine, 'Дизайн', ['2026-09-11'], PlanTask::STATUS_REVIEW);
         // Задача без відміток у періоді і чужа задача не потрапляють.
-        $task($mine, 'Серпень', ['2026-08-20']);
+        $task($mine, 'Серпень', ['2026-08-20'], PlanTask::STATUS_DONE);
         $task($theirs, 'Чуже', ['2026-09-05']);
 
         Sanctum::actingAs($mine->user);
 
         $this->getJson('/api/stats?date_from=2026-09-01&date_to=2026-09-30')
             ->assertOk()
-            ->assertJsonPath('plan_tasks.total', 2)
-            ->assertJsonPath('plan_tasks.days', 4)
-            ->assertJsonCount(2, 'plan_tasks.top')
+            ->assertJsonPath('plan_tasks.total', 3)
+            ->assertJsonPath('plan_tasks.done', 1)
+            ->assertJsonPath('plan_tasks.review', 1)
+            ->assertJsonCount(3, 'plan_tasks.top')
             ->assertJsonPath('plan_tasks.top.0', [
                 'name' => 'Інтеграція',
                 'project' => 'TumTum',

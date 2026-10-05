@@ -1,12 +1,12 @@
 <script setup>
-// Задачі з плану за період: над скількома працювали і над якими найбільше — за відмітками
-// днів у Планах (часу в Планах немає, тож міра — дні).
+// Задачі з плану за період: над скількома працювали, скільки з них виконано і на перевірці,
+// і над якими найбільше — за відмітками днів у Планах (часу в Планах немає, тож міра — дні).
 import { computed } from 'vue';
 import StatsBarList from './StatsBarList.vue';
 import { CHART_SERIES } from './chartColors';
 
 const props = defineProps({
-  // { total, days, top: [{ name, project, status, days, employee }] }
+  // { total, done, review, top: [{ name, project, status, days, employee }] }
   tasks: { type: Object, required: true },
   // Задачі кількох працівників разом — біля назви показуємо, чия вона.
   showEmployee: { type: Boolean, default: false },
@@ -36,8 +36,12 @@ const items = computed(() => props.tasks.top.map((task, i) => ({
           <span class="figure-label">задач у роботі</span>
         </div>
         <div class="figure">
-          <span class="figure-value">{{ tasks.days }}</span>
-          <span class="figure-label">дн. відміток разом</span>
+          <span class="figure-value">{{ tasks.done }}</span>
+          <span class="figure-label">виконано</span>
+        </div>
+        <div class="figure">
+          <span class="figure-value">{{ tasks.review }}</span>
+          <span class="figure-label">на перевірці</span>
         </div>
       </div>
       <div class="part-title">Найбільше днів у роботі</div>
