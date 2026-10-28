@@ -47,7 +47,6 @@ const CREDENTIALS_FILE_NAME = '.yaware-credentials.json';
 const LOGIN_URL = 'https://app.yaware.com.ua/';
 const REPORT_URL = 'https://app.yaware.com.ua/reports/by-application';
 const IDLE_ACTIVITIES_URL = 'https://app.yaware.com.ua/reports/by-idle-activities';
-const EXPORT_TEXT = 'Експорт у XLS';
 const downloadDirectory = path.resolve(process.cwd(), YAWARE_DOWNLOAD_DIR || 'downloads');
 
 // Дані звітів беремо з GraphQL API, яким користується сам веб-додаток Yaware.
@@ -55,8 +54,8 @@ const downloadDirectory = path.resolve(process.cwd(), YAWARE_DOWNLOAD_DIR || 'do
 // disabled request access"), тому авторизуємось JWT-токеном із залогіненої сесії.
 const GRAPHQL_API_URL = 'https://data-api-3.yaware.com/graphql/v1';
 const JWT_GENERATE_URL = 'https://app.yaware.com.ua/jwt/generate';
-const SUMMARY_START_COLUMN_INDEX = 15;
-const TASK_TABLE_START_COLUMN_INDEX = 20;
+const SUMMARY_START_COLUMN_INDEX = 19;
+const TASK_TABLE_START_COLUMN_INDEX = 24;
 const TASK_TABLE_START_ROW_INDEX = 6;
 const TASK_TABLE_EMPTY_ROW_COUNT = 10;
 const DAY_REPORT_CATEGORIES = [
@@ -113,7 +112,19 @@ function renderProgressBar(progress, label) {
   output.write(`\rПрогрес: [${bar}] ${String(normalizedProgress).padStart(3, ' ')}% · ${label.padEnd(45, ' ')}`);
 }
 
+// YAWARE_TIMING=true — у stderr час кожного кроку і XHR-запити, яких чекав
+// воркер (заміри й налагодження очікувань); у звичайному режимі мовчить.
+const TIMING_ENABLED = process.env.YAWARE_TIMING === 'true';
+const timingStartedAt = Date.now();
+
+function logTiming(message) {
+  if (TIMING_ENABLED) {
+    console.error(`[timing] +${((Date.now() - timingStartedAt) / 1000).toFixed(1)}s ${message}`);
+  }
+}
+
 function updateProgress(progress, label) {
+  logTiming(label);
   renderProgressBar(progress, label);
 }
 
@@ -903,7 +914,7 @@ function localizeDayReportValue(value) {
 function mapReportRows(rows) {
   if (!rows.length) {
     return {
-      columns: ['Загальний час', 'Діяльність', 'Категорія', 'Продуктивність'],
+      columns: ['Продуктивність', 'Діяльність', 'Категорія', 'Загальний час'],
       rows: [['', 'Немає даних', '', '']],
     };
   }
@@ -917,17 +928,17 @@ function mapReportRows(rows) {
   });
 
   return {
-    columns: ['Загальний час', 'Діяльність', 'Категорія', 'Продуктивність'],
+    columns: ['Продуктивність', 'Діяльність', 'Категорія', 'Загальний час'],
     rows: sortedRows.map((row) => {
       const rawCategory = String(getReportColumnValue(row, ['category']) || '').trim();
       const localizedCategory = rawCategory.toLowerCase() === 'uncategorized' ? '' : localizeDayReportValue(rawCategory);
       const rawProductivity = getReportColumnValue(row, ['productivity', 'type']);
 
       return [
-        formatReportValue('time', getReportColumnValue(row, timeAliases)),
+        localizeDayReportValue(formatReportValue('productivity', rawProductivity)),
         stripHtmlTags(formatReportValue('activity', getReportColumnValue(row, ['activity', 'title', 'name', 'caption', 'application', 'app', 'domain', 'url']))),
         localizedCategory,
-        localizeDayReportValue(formatReportValue('productivity', rawProductivity)),
+        formatReportValue('time', getReportColumnValue(row, timeAliases)),
       ];
     }),
   };
@@ -1142,7 +1153,7 @@ function buildPrimaryDeltaConfig(primaryRows) {
   return {
     formulas,
     primaryDurationTotalFormula: `=SUM(D${firstPrimaryDataRowNumber}:D${lastFormulaRowNumber})`,
-    totalFormula: `=SUM(J${firstFormulaRowNumber}:J${lastFormulaRowNumber})`,
+    totalFormula: `=SUM(K${firstFormulaRowNumber}:K${lastFormulaRowNumber})`,
     totalRowNumber,
   };
 }
@@ -1341,13 +1352,18 @@ async function requestJwtToken() {
  * нічого не означає, справжня перевірка це повторний запит токена.
  */
 async function renewYawareSession() {
+  // Окрема вкладка (кукі спільні з контекстом): GraphQL-запити йдуть паралельно
+  // з налаштуванням фільтрів, і перехід основної вкладки на логін зірвав би їх.
+  const loginPage = await context.newPage();
   try {
-    await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded' });
-    await performLogin(page, yawareEmail, yawarePassword);
+    await loginPage.goto(LOGIN_URL, { waitUntil: 'domcontentloaded' });
+    await performLogin(loginPage, yawareEmail, yawarePassword);
   } catch (error) {
     if (error?.code === 'INVALID_CREDENTIALS') {
       throw error;
     }
+  } finally {
+    await loginPage.close().catch(() => null);
   }
 }
 
@@ -1367,7 +1383,7 @@ async function fetchJwtToken() {
         throw error;
       }
 
-      await page.waitForTimeout(JWT_RETRY_DELAYS_MS[attempt]);
+      await new Promise((resolve) => setTimeout(resolve, JWT_RETRY_DELAYS_MS[attempt]));
       await renewYawareSession();
     }
   }
@@ -1612,6 +1628,55 @@ async function fetchReportByDay(apiReportDate, employeeId) {
   };
 }
 
+function parseClockSeconds(value) {
+  const match = /(\d{1,2}):(\d{2}):(\d{2})\s*$/.exec(String(value || ''));
+  if (!match) {
+    return null;
+  }
+  return Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]);
+}
+
+// Хронологія дій із точністю до секунди. Без офлайн-активності рядки збігаються
+// з XLS-звітом «за додатками» (там час обрізаний до хвилин), а з нею видно,
+// чим заповнені паузи між рядками.
+async function fetchActivityTimeline(apiReportDate, employeeId) {
+  const query = `
+    query($filter: ApplicationGridFilterInput!) {
+      account {
+        getApplicationGridByFilter(filter: $filter, limit: 10000, offset: 0, groupBy: DAY, orderField: timeStart, orderDirection: ASC) {
+          ... on ApplicationGridWithTitle {
+            totalCount
+            applicationGridWithTitle { timeStart timeEnd }
+          }
+        }
+      }
+    }
+  `;
+
+  const loadIntervals = async (includeIdleActivity) => {
+    const data = await graphqlRequest('ActivityTimeline GraphQL request', query, {
+      filter: {
+        dateRange: { fromISO: apiReportDate, toISO: apiReportDate },
+        userIdIn: [String(employeeId)],
+        groupDayByApplication: true,
+        includeIdleActivity,
+      },
+    });
+    const grid = data?.account?.getApplicationGridByFilter;
+    const rows = grid?.applicationGridWithTitle || [];
+    if (Number(grid?.totalCount) > rows.length) {
+      throw new Error(`API повернув ${rows.length} з ${grid.totalCount} дій.`);
+    }
+    return rows.map((row) => ({
+      start: parseClockSeconds(row.timeStart),
+      end: parseClockSeconds(row.timeEnd),
+    }));
+  };
+
+  const [windows, allEvents] = await Promise.all([loadIntervals(false), loadIntervals(true)]);
+  return { windows, allEvents };
+}
+
 async function saveCombinedHtmlExcel(summaryPayload, dayReportPayload, downloadedFilePath, outputDirectory, apiReportDate, reportEmployeeName = '', idleActivitiesRows = null) {
   const downloadedFileBuffer = await fs.readFile(downloadedFilePath);
   const downloadedFileContentUtf8 = downloadedFileBuffer.toString('utf8');
@@ -1660,11 +1725,11 @@ async function saveCombinedHtmlExcel(summaryPayload, dayReportPayload, downloade
       return;
     }
 
-    while (combinedRows[rowIndex].length < 10) {
+    while (combinedRows[rowIndex].length < 11) {
       combinedRows[rowIndex].push({ type: 'td', value: '' });
     }
 
-    combinedRows[rowIndex][9] = {
+    combinedRows[rowIndex][10] = {
       type: 'td',
       value: formula,
       isDurationCell: true,
@@ -1688,11 +1753,11 @@ async function saveCombinedHtmlExcel(summaryPayload, dayReportPayload, downloade
       isDurationCell: true,
     };
 
-    while (combinedRows[totalRowIndex].length < 10) {
+    while (combinedRows[totalRowIndex].length < 11) {
       combinedRows[totalRowIndex].push({ type: 'td', value: '' });
     }
 
-    combinedRows[totalRowIndex][9] = {
+    combinedRows[totalRowIndex][10] = {
       type: 'td',
       value: primaryDeltaConfig.totalFormula,
       isDurationCell: true,
@@ -1726,10 +1791,11 @@ async function saveCombinedHtmlExcel(summaryPayload, dayReportPayload, downloade
   return combinedExcelPath;
 }
 
-async function saveCombinedXlsx(summaryPayload, dayReportPayload, downloadedFilePath, outputDirectory, apiReportDate, reportEmployeeName = '', idleActivitiesRows = null) {
+async function saveCombinedXlsx(summaryPayload, dayReportPayload, downloadedFilePath, outputDirectory, apiReportDate, reportEmployeeName = '', idleActivitiesRows = null, activityTimeline = null) {
   const secondaryRows = buildSecondaryRows(summaryPayload, dayReportPayload, apiReportDate, reportEmployeeName, idleActivitiesRows);
   const combinedExcelPath = path.join(outputDirectory, `yaware-report-${apiReportDate}.xlsx`);
   const pythonScript = `
+import copy
 import json
 import os
 import posixpath
@@ -1755,7 +1821,7 @@ trello_tasks = json.loads(os.environ.get('TRELLO_TASKS_JSON') or '[]')
 report_date_iso = os.environ.get('REPORT_DATE_ISO', '')
 # Пауза між сусідніми рядками активності, більша за цей поріг, розриває блок таски
 # (наприклад, обідня перерва) — як у ручних звітах.
-task_gap_split = int(os.environ.get('TASK_GAP_SPLIT_MINUTES') or '15') / 1440.0
+task_gap_split = int(os.environ.get('TASK_GAP_SPLIT_MINUTES') or '5') / 1440.0
 # Хвіст активності після due, який ще зараховується тасці: due рідко ставлять посекундно.
 task_due_grace = int(os.environ.get('TASK_DUE_GRACE_MINUTES') or '15') / 1440.0
 # Короткий залишок поза тасками (перемикання, пауза між тасками) не вартий окремого
@@ -1853,22 +1919,29 @@ def cell_sort_key(cell):
     column_name, row_number = split_cell_reference(cell.attrib.get('r', 'A1'))
     return (row_number, column_index(column_name))
 
+# Індекс рядків аркуша за номером: ensure_row викликається тисячі разів, і
+# лінійний пошук по всіх рядках щоразу забирав половину часу скрипта. Рядки
+# додаються лише через ensure_row, тож індекс не застаріває.
+row_index_by_sheet = {}
+
 def ensure_row(sheet_data, row_number):
     row_tag = f'{{{MAIN_NS}}}row'
-    rows = list(sheet_data.findall(row_tag))
-    for row in rows:
-        if int(row.attrib.get('r', '0')) == row_number:
-            return row
+    row_index = row_index_by_sheet.get(id(sheet_data))
+    if row_index is None:
+        row_index = {int(row.attrib.get('r', '0')): row for row in sheet_data.findall(row_tag)}
+        row_index_by_sheet[id(sheet_data)] = row_index
+
+    existing_row = row_index.get(row_number)
+    if existing_row is not None:
+        return existing_row
 
     new_row = ET.Element(row_tag, {'r': str(row_number)})
-    inserted = False
-    for index, row in enumerate(rows):
-        if int(row.attrib.get('r', '0')) > row_number:
-            sheet_data.insert(index, new_row)
-            inserted = True
-            break
-    if not inserted:
+    next_row_numbers = [number for number in row_index if number > row_number]
+    if next_row_numbers:
+        sheet_data.insert(list(sheet_data).index(row_index[min(next_row_numbers)]), new_row)
+    else:
         sheet_data.append(new_row)
+    row_index[row_number] = new_row
     return new_row
 
 def remove_existing_cell(row_element, cell_reference):
@@ -1876,6 +1949,17 @@ def remove_existing_cell(row_element, cell_reference):
     for existing_cell in list(row_element.findall(cell_tag)):
         if existing_cell.attrib.get('r') == cell_reference:
             row_element.remove(existing_cell)
+
+def place_cell(row_element, cell):
+    """Ставить клітинку на місце однойменної, зберігаючи порядок колонок —
+    без пересортування всього рядка після кожної вставки."""
+    remove_existing_cell(row_element, cell.attrib['r'])
+    new_key = cell_sort_key(cell)
+    for index, existing_cell in enumerate(row_element):
+        if cell_sort_key(existing_cell) > new_key:
+            row_element.insert(index, cell)
+            return
+    row_element.append(cell)
 
 def find_cell(row_element, cell_reference):
     cell_tag = f'{{{MAIN_NS}}}c'
@@ -1986,7 +2070,6 @@ def convert_existing_cell_to_time(row_element, cell_reference, shared_strings, s
 
 def upsert_inline_string(row_element, cell_reference, value, style_id=None):
     cell_tag = f'{{{MAIN_NS}}}c'
-    remove_existing_cell(row_element, cell_reference)
 
     cell_attributes = {'r': cell_reference, 't': 'inlineStr'}
     if style_id is not None:
@@ -1997,12 +2080,10 @@ def upsert_inline_string(row_element, cell_reference, value, style_id=None):
     if value.strip() != value or '\\n' in value:
         text.attrib[f'{{{XML_NS}}}space'] = 'preserve'
     text.text = value
-    row_element.append(cell)
-    row_element[:] = sorted(list(row_element), key=cell_sort_key)
+    place_cell(row_element, cell)
 
 def upsert_numeric_cell(row_element, cell_reference, numeric_value, style_id=None):
     cell_tag = f'{{{MAIN_NS}}}c'
-    remove_existing_cell(row_element, cell_reference)
 
     cell_attributes = {'r': cell_reference}
     if style_id is not None:
@@ -2010,16 +2091,13 @@ def upsert_numeric_cell(row_element, cell_reference, numeric_value, style_id=Non
     cell = ET.Element(cell_tag, cell_attributes)
     value_element = ET.SubElement(cell, f'{{{MAIN_NS}}}v')
     value_element.text = f'{numeric_value:.15g}'
-    row_element.append(cell)
-    row_element[:] = sorted(list(row_element), key=cell_sort_key)
+    place_cell(row_element, cell)
 
 def upsert_styled_blank_cell(row_element, cell_reference, style_id):
     cell_tag = f'{{{MAIN_NS}}}c'
-    remove_existing_cell(row_element, cell_reference)
 
     cell = ET.Element(cell_tag, {'r': cell_reference, 's': str(style_id)})
-    row_element.append(cell)
-    row_element[:] = sorted(list(row_element), key=cell_sort_key)
+    place_cell(row_element, cell)
 
 def get_numeric_cell_value(row_element, cell_reference):
     cell = find_cell(row_element, cell_reference)
@@ -2051,7 +2129,6 @@ def trello_time_fraction(value, report_date_iso, default):
 
 def upsert_formula_cell(row_element, cell_reference, formula, style_id=None):
     cell_tag = f'{{{MAIN_NS}}}c'
-    remove_existing_cell(row_element, cell_reference)
 
     cell_attributes = {'r': cell_reference}
     if style_id is not None:
@@ -2061,8 +2138,285 @@ def upsert_formula_cell(row_element, cell_reference, formula, style_id=None):
     formula_element.text = formula
     value_element = ET.SubElement(cell, f'{{{MAIN_NS}}}v')
     value_element.text = '0'
-    row_element.append(cell)
-    row_element[:] = sorted(list(row_element), key=cell_sort_key)
+    place_cell(row_element, cell)
+
+def load_activity_timeline(sheet_data, primary_row_count):
+    # Рядки XLS мають збігатися з API один до одного: той самий порядок і ті самі хвилини.
+    try:
+        with open(os.environ['ACTIVITY_TIMELINE_PATH'], 'r', encoding='utf-8') as timeline_file:
+            timeline = json.load(timeline_file)
+    except (KeyError, OSError, ValueError):
+        return None
+    if not timeline:
+        return None
+
+    windows = timeline.get('windows') or []
+    if len(windows) != primary_row_count - 1:
+        return None
+
+    for offset, window in enumerate(windows):
+        row_number = offset + 2
+        row_element = ensure_row(sheet_data, row_number)
+        if window.get('start') is None or window.get('end') is None:
+            return None
+        for column, seconds in (('G', window['start']), ('H', window['end'])):
+            sheet_value = get_numeric_cell_value(row_element, f'{column}{row_number}')
+            # Звіряємо до хвилини: старий експорт Yaware давав «09:07», з 2026-10-28 —
+            # «09:07:45», тож секунди відкидаємо з обох боків, а не округлюємо.
+            if sheet_value is None or round(sheet_value * 86400) // 60 != seconds // 60:
+                return None
+
+    events = sorted(
+        (event['start'], event['end'])
+        for event in (timeline.get('allEvents') or [])
+        if event.get('start') is not None and event.get('end') is not None and event['end'] > event['start']
+    )
+    return windows, events
+
+def split_gap(gap_start, gap_end, events):
+    # Повертає (секунди, покриті подіями, список непокритих проміжків як (початок, кінець)).
+    covered_seconds = 0
+    uncovered = []
+    cursor = gap_start
+    for event_start, event_end in events:
+        if event_end <= cursor:
+            continue
+        if event_start >= gap_end:
+            break
+        if event_start > cursor:
+            uncovered.append((cursor, event_start))
+        covered_until = min(event_end, gap_end)
+        covered_seconds += covered_until - max(event_start, cursor)
+        cursor = covered_until
+        if cursor >= gap_end:
+            break
+    if cursor < gap_end:
+        uncovered.append((cursor, gap_end))
+    return covered_seconds, uncovered
+
+IDLE_NAME_HEADER = "Ім'я офлайн активності"
+IDLE_TABLE_HEADERS = ['Період', 'Працівник', 'Група', IDLE_NAME_HEADER, 'Коментар', 'Перша дія', 'Тривалість', 'Остання активність']
+MISSED_IDLE_NAME = 'Пропущено'
+IDLE_SUMMARY_START_COLUMN = 'W'
+# Колонка «Час -» основної таблиці (пауза між рядками).
+PAUSE_COLUMN = 'K'
+IDLE_CANCELLED_NAMES = ('Перерва', 'Особисте', MISSED_IDLE_NAME)
+IDLE_DISTRIBUTION_LABELS = ['1хв', '2хв', '3хв', '4хв', '5хв']
+# Ті самі межі, що й у колонках L–Q: (назва, діапазон над назвою, нижня межа в секундах, верхня включно або None, тільки пропущене).
+# Рядки «Пропущено» (проміжки без жодних подій, як у Q) потрапляють лише в останню колонку.
+IDLE_DURATION_BUCKETS = [
+    ('1хв', '0:30 – 1:59', 30, 119, False),
+    ('2хв', '2:00 – 2:59', 120, 179, False),
+    ('3хв', '3:00 – 3:59', 180, 239, False),
+    ('4хв', '4:00 – 4:59', 240, 299, False),
+    ('5+ хв', 'від 5:00', 300, None, False),
+    (MISSED_IDLE_NAME, 'від 0:30', 30, None, True),
+]
+
+def format_clock(seconds):
+    return f'{seconds // 3600:02d}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}'
+
+# Позначка клітинки «Час на завдання»: формулу підставляємо після розподілу тасок.
+TASK_TIME_TOTAL_PLACEHOLDER = '__TASK_TIME_TOTAL__'
+
+def build_idle_table(rows, generated_idle_rows, employee_name, primary_total_row=None):
+    # Таблиця офлайн-активностей іде останньою у secondary_rows: заголовок і рядки до кінця.
+    header_index = next(
+        (index for index, row in enumerate(rows) if any(cell.get('value') == IDLE_NAME_HEADER for cell in row)),
+        None,
+    )
+    if header_index is None:
+        if not generated_idle_rows:
+            return
+        rows.append([{'value': ''}])
+        rows.append([{'value': 'Офлайн активність' if index == 0 else '', 'isSectionTitle': True} for index in range(len(IDLE_TABLE_HEADERS))])
+        rows.append([{'value': header} for header in IDLE_TABLE_HEADERS])
+        header_index = len(rows) - 1
+
+    headers = [str(cell.get('value', '')) for cell in rows[header_index]]
+    data_rows = rows[header_index + 1:]
+    template_row = data_rows[0] if data_rows else []
+
+    def column_of(header):
+        return headers.index(header) if header in headers else None
+
+    def template_value(header):
+        index = column_of(header)
+        return template_row[index].get('value', '') if index is not None and index < len(template_row) else ''
+
+    period_value = template_value('Період') or os.environ.get('REPORT_PERIOD', '')
+    employee_value = template_value('Працівник') or employee_name
+    group_value = template_value('Група')
+    for idle_name, pause_start, pause_end in generated_idle_rows:
+        values = {
+            'Період': period_value,
+            'Працівник': employee_value,
+            'Група': group_value,
+            IDLE_NAME_HEADER: idle_name,
+            'Перша дія': format_clock(pause_start),
+            'Тривалість': format_clock(pause_end - pause_start),
+            'Остання активність': format_clock(pause_end),
+        }
+        data_rows.append([{'value': values.get(header, '')} for header in headers])
+
+    start_column = column_of('Перша дія')
+
+    def start_seconds(row):
+        if start_column is None or start_column >= len(row):
+            return 0
+        parsed = parse_duration_seconds(row[start_column].get('value', ''))
+        return parsed if parsed is not None else 0
+
+    data_rows = sorted(data_rows, key=start_seconds)
+
+    # Праворуч від таблиці — тривалість кожного рядка у своїй колонці, над назвами діапазони, внизу підсумки.
+    table_width = len(headers)
+    duration_column = column_of('Тривалість')
+    name_column = column_of(IDLE_NAME_HEADER)
+    title_row = rows[header_index - 1]
+    title_row.extend({'value': '', 'isSectionTitle': True} for _ in range(table_width - len(title_row)))
+    title_row.extend({'value': range_label, 'idleStyle': 'range'} for _, range_label, _, _, _ in IDLE_DURATION_BUCKETS)
+    rows[header_index].extend({'value': title, 'idleStyle': 'header'} for title, _, _, _, _ in IDLE_DURATION_BUCKETS)
+    for row in data_rows:
+        row.extend({'value': ''} for _ in range(table_width - len(row)))
+        duration_seconds = parse_duration_seconds(row[duration_column].get('value', '')) if duration_column is not None else None
+        if duration_seconds is not None:
+            # Числом, а не текстом, щоб під колонкою можна було підбити суму.
+            row[duration_column] = {'value': row[duration_column].get('value', ''), 'durationSeconds': duration_seconds}
+        is_missed = name_column is not None and row[name_column].get('value') == MISSED_IDLE_NAME
+        for _, _, lower_bound, upper_bound, missed_only in IDLE_DURATION_BUCKETS:
+            if missed_only == is_missed and duration_seconds is not None and duration_seconds >= lower_bound and (upper_bound is None or duration_seconds <= upper_bound):
+                row.append({'value': '', 'seconds': duration_seconds})
+            else:
+                row.append({'value': '', 'idleStyle': 'cell'})
+
+    first_data_row_number = header_index + 2
+    last_data_row_number = header_index + 1 + len(data_rows)
+    total_row = [{'value': '', 'isSpacerCell': True} for _ in range(table_width)]
+    if duration_column is not None:
+        letter = column_letter(start_column_index + duration_column)
+        total_row[duration_column] = {'value': '', 'formula': f'SUM({letter}{first_data_row_number}:{letter}{last_data_row_number})'}
+    for bucket_offset in range(len(IDLE_DURATION_BUCKETS)):
+        letter = column_letter(start_column_index + table_width + bucket_offset)
+        total_row.append({'value': '', 'formula': f'SUM({letter}{first_data_row_number}:{letter}{last_data_row_number})'})
+    rows[header_index + 1:] = data_rows + [total_row]
+
+    # Через 3 порожні рядки під таблицею — зведення по кожній офлайн-активності (і коментарю) у колонках W–AA, без заливки й рамок.
+    comment_column = column_of('Коментар')
+    summary_groups = {}
+    for row in data_rows:
+        idle_name = str(row[name_column].get('value', '')).strip() if name_column is not None else ''
+        comment = str(row[comment_column].get('value', '')).strip() if comment_column is not None else ''
+        duration_seconds = row[duration_column].get('durationSeconds') if duration_column is not None else None
+        if not idle_name:
+            continue
+        # Одна активність — один рядок; різні коментарі до неї йдуть через кому.
+        group = summary_groups.setdefault(idle_name, [0, 0, []])
+        group[0] += 1
+        group[1] += duration_seconds or 0
+        if comment and comment not in group[2]:
+            group[2].append(comment)
+    if summary_groups:
+        summary_offset = column_index(IDLE_SUMMARY_START_COLUMN) - start_column_index
+        rows.extend([{'value': '', 'isSpacerCell': True}] for _ in range(3))
+        for idle_name, (count, total_seconds, comments) in summary_groups.items():
+            rows.append([{'value': '', 'isSpacerCell': True} for _ in range(summary_offset)] + [
+                {'value': idle_name, 'plain': True},
+                {'value': ', '.join(comments), 'plain': True},
+                {'value': '', 'plainNumber': count},
+                {'value': '', 'plainSeconds': total_seconds},
+                {'value': '', 'plainSeconds': round(total_seconds / count)},
+            ])
+
+        # Через 1 порожній рядок — «Загалом» по всіх активностях і «Відміна» по перервах, особистому й пропущеному.
+        rows.append([{'value': '', 'isSpacerCell': True}])
+        overall_row_number = len(rows) + 1
+        for title, names in (('Загалом', None), ('Відміна', IDLE_CANCELLED_NAMES)):
+            groups = [group for name, group in summary_groups.items() if names is None or name in names]
+            rows.append([{'value': '', 'isSpacerCell': True} for _ in range(summary_offset)] + [
+                {'value': title, 'plain': True, 'bold': True},
+                {'value': '', 'isSpacerCell': True},
+                {'value': '', 'plainNumber': sum(group[0] for group in groups), 'bold': True},
+                {'value': '', 'plainSeconds': sum(group[1] for group in groups), 'bold': True},
+            ])
+
+        # Ще через 1 порожній рядок — розподіл офлайн-активностей за тривалістю (ті самі межі, що й колонки праворуч від таблиці, без «Пропущено»).
+        rows.append([{'value': '', 'isSpacerCell': True}])
+        for label, (_, _, lower_bound, upper_bound, _) in zip(IDLE_DISTRIBUTION_LABELS, IDLE_DURATION_BUCKETS):
+            bucket_durations = [
+                row[duration_column].get('durationSeconds') for row in data_rows
+                if (name_column is None or row[name_column].get('value') != MISSED_IDLE_NAME)
+                and row[duration_column].get('durationSeconds') is not None
+                and row[duration_column]['durationSeconds'] >= lower_bound
+                and (upper_bound is None or row[duration_column]['durationSeconds'] <= upper_bound)
+            ] if duration_column is not None else []
+            rows.append([{'value': '', 'isSpacerCell': True} for _ in range(summary_offset)] + [
+                {'value': label, 'plain': True},
+                {'value': '', 'isSpacerCell': True},
+                {'value': '', 'plainNumber': len(bucket_durations)},
+                {'value': '', 'plainSeconds': sum(bucket_durations)},
+                {'value': '', 'plainSeconds': round(sum(bucket_durations) / len(bucket_durations))} if bucket_durations else {'value': '', 'isSpacerCell': True},
+            ])
+
+        # Одразу під розподілом — два жирні рядки для звірки: підсумок колонки «Час -» основної таблиці і «Загалом» з детальної таблиці.
+        total_letter = column_letter(column_index(IDLE_SUMMARY_START_COLUMN) + 3)
+        pause_total_reference = f'{PAUSE_COLUMN}{primary_total_row}' if primary_total_row else None
+        for title, formula in (
+            ('час офлайн для звірки', pause_total_reference),
+            ('час офлайн для звірки з детальної таблиці', f'{total_letter}{overall_row_number}'),
+        ):
+            rows.append([{'value': '', 'isSpacerCell': True} for _ in range(summary_offset)] + [
+                {'value': title, 'plain': True, 'bold': True},
+                {'value': '', 'isSpacerCell': True},
+                {'value': '', 'isSpacerCell': True},
+                {'value': '', 'plainFormula': formula, 'bold': True} if formula else {'value': '', 'isSpacerCell': True},
+            ])
+        # Праворуч від останнього рядка червоним — різниця між «звіркою» і «детальною таблицею» без знака.
+        if pause_total_reference:
+            check_cell = f'{total_letter}{len(rows) - 1}'
+            detail_cell = f'{total_letter}{len(rows)}'
+        else:
+            check_cell = None
+            detail_cell = f'{total_letter}{len(rows)}'
+        if check_cell:
+            rows[-1].append({'value': '', 'plainFormula': f'ABS({detail_cell}-{check_cell})', 'red': True})
+
+        # Через 1 порожній рядок — час за комп'ютером (підсумок D), загальна активність (підсумок H) і час на завдання (сума колонки «Час» таблиці тасок).
+        rows.append([{'value': '', 'isSpacerCell': True}])
+        computer_time_cell = f'{total_letter}{len(rows) + 1}'
+        activity_time_cell = f'{total_letter}{len(rows) + 2}'
+        for title, formula in (
+            ('Час за комп-ом', f'D{primary_total_row}' if primary_total_row else None),
+            ('Загальна активність час', f'H{primary_total_row}' if primary_total_row else None),
+            ('Час на завдання', TASK_TIME_TOTAL_PLACEHOLDER),
+        ):
+            rows.append([{'value': '', 'isSpacerCell': True} for _ in range(summary_offset)] + [
+                {'value': title, 'plain': True},
+                {'value': '', 'isSpacerCell': True},
+                {'value': '', 'isSpacerCell': True},
+                {'value': '', 'plainFormula': formula} if formula else {'value': '', 'isSpacerCell': True},
+            ])
+
+        # Одразу під нею жирним — різниця активності й часу за комп'ютером (без знака) і повтор обох значень звірки офлайну.
+        difference_cell = f'{total_letter}{len(rows) + 1}'
+        report_offline_cell = f'{total_letter}{len(rows) + 2}'
+        for title, formula in (
+            ('Різниця', f'ABS({activity_time_cell}-{computer_time_cell})' if primary_total_row else None),
+            ('Час офлайн зі звіту', check_cell),
+            ('Час офлайн для звірки з детальної таблиці', detail_cell),
+        ):
+            rows.append([{'value': '', 'isSpacerCell': True} for _ in range(summary_offset)] + [
+                {'value': title, 'plain': True, 'bold': True},
+                {'value': '', 'isSpacerCell': True},
+                {'value': '', 'isSpacerCell': True},
+                {'value': '', 'plainFormula': formula, 'bold': True} if formula else {'value': '', 'isSpacerCell': True},
+            ])
+            # Праворуч червоним — розбіжність із рядком вище без знака, лише якщо вона є:
+            # «Час офлайн зі звіту» порівнюємо з «Різницею», детальну таблицю — з «Час офлайн зі звіту».
+            previous_cell = {'Час офлайн зі звіту': difference_cell, 'Час офлайн для звірки з детальної таблиці': report_offline_cell}.get(title)
+            if previous_cell and formula and primary_total_row:
+                delta = f'ABS({previous_cell}-{total_letter}{len(rows)})'
+                rows[-1].append({'value': '', 'plainFormula': f'IF(ROUND({delta}*86400,0)=0,"",{delta})', 'red': True})
 
 def get_or_create_child(parent, tag_name):
     child = parent.find(f'{{{MAIN_NS}}}{tag_name}')
@@ -2130,7 +2484,7 @@ def ensure_default_cell_xfs(styles_root):
     cell_xfs.attrib['count'] = str(len(cell_xfs))
     return cell_xfs
 
-def create_border_style(styles_root, *, fill_id=0, bold=False, num_fmt_code=None, horizontal_alignment=None, include_border=True, wrap_text=False):
+def create_border_style(styles_root, *, fill_id=0, bold=False, font_color=None, num_fmt_code=None, horizontal_alignment=None, include_border=True, wrap_text=False):
     border_id = 0
     if include_border:
         borders = ensure_default_borders(styles_root)
@@ -2143,10 +2497,13 @@ def create_border_style(styles_root, *, fill_id=0, bold=False, num_fmt_code=None
         borders.attrib['count'] = str(len(borders))
 
     font_id = 0
-    if bold:
+    if bold or font_color:
         fonts = ensure_default_fonts(styles_root)
         font = ET.SubElement(fonts, f'{{{MAIN_NS}}}font')
-        ET.SubElement(font, f'{{{MAIN_NS}}}b')
+        if bold:
+            ET.SubElement(font, f'{{{MAIN_NS}}}b')
+        if font_color:
+            ET.SubElement(font, f'{{{MAIN_NS}}}color', {'rgb': font_color})
         ET.SubElement(font, f'{{{MAIN_NS}}}sz', {'val': '10'})
         ET.SubElement(font, f'{{{MAIN_NS}}}name', {'val': 'Calibri'})
         font_id = len(fonts) - 1
@@ -2164,7 +2521,7 @@ def create_border_style(styles_root, *, fill_id=0, bold=False, num_fmt_code=None
         'applyBorder': '1' if include_border else '0',
         'applyFill': '1' if fill_id else '0',
     }
-    if bold:
+    if bold or font_color:
         xf_attributes['applyFont'] = '1'
     if num_fmt_code:
         xf_attributes['applyNumberFormat'] = '1'
@@ -2190,37 +2547,6 @@ def create_solid_fill(styles_root, rgb):
     fill_id = len(fills) - 1
     fills.attrib['count'] = str(len(fills))
     return fill_id
-
-def ensure_dxfs(styles_root):
-    dxfs = get_or_create_child(styles_root, 'dxfs')
-    dxfs.attrib['count'] = str(len(dxfs))
-    return dxfs
-
-def create_fill_dxf(styles_root, rgb):
-    dxfs = ensure_dxfs(styles_root)
-    dxf = ET.SubElement(dxfs, f'{{{MAIN_NS}}}dxf')
-    fill = ET.SubElement(dxf, f'{{{MAIN_NS}}}fill')
-    pattern = ET.SubElement(fill, f'{{{MAIN_NS}}}patternFill', {'patternType': 'solid'})
-    ET.SubElement(pattern, f'{{{MAIN_NS}}}fgColor', {'rgb': rgb})
-    ET.SubElement(pattern, f'{{{MAIN_NS}}}bgColor', {'rgb': rgb})
-    dxf_id = len(dxfs) - 1
-    dxfs.attrib['count'] = str(len(dxfs))
-    return dxf_id
-
-def add_greater_than_zero_conditional_formatting(worksheet_root, sqref, dxf_id, priority):
-    conditional_formatting = ET.SubElement(worksheet_root, f'{{{MAIN_NS}}}conditionalFormatting', {'sqref': sqref})
-    cf_rule = ET.SubElement(
-        conditional_formatting,
-        f'{{{MAIN_NS}}}cfRule',
-        {
-            'type': 'cellIs',
-            'dxfId': str(dxf_id),
-            'priority': str(priority),
-            'operator': 'greaterThan',
-        },
-    )
-    formula = ET.SubElement(cf_rule, f'{{{MAIN_NS}}}formula')
-    formula.text = '0'
 
 def normalize_target_path(target):
     cleaned = target.lstrip('/')
@@ -2264,25 +2590,54 @@ with tempfile.TemporaryDirectory() as temp_directory:
     summary_border_style_id = create_border_style(styles_root)
     yellow_fill_id = create_solid_fill(styles_root, 'FFFF00')
     summary_highlight_style_id = create_border_style(styles_root, fill_id=yellow_fill_id)
-    light_red_dxf_id = create_fill_dxf(styles_root, 'FFFFCCCC')
-    primary_delta_duration_style_id = create_border_style(styles_root, num_fmt_code='[h]:mm:ss', horizontal_alignment='center', include_border=False)
-    primary_delta_total_style_id = create_border_style(styles_root, bold=True, num_fmt_code='[h]:mm:ss', horizontal_alignment='center', include_border=False)
+    # Колонки J–R зафарбовані світло-червоним повністю, а не лише там, де є час, і з межами клітинок.
+    light_red_fill_id = create_solid_fill(styles_root, 'FFFFCCCC')
+    primary_delta_duration_style_id = create_border_style(styles_root, fill_id=light_red_fill_id, num_fmt_code='[h]:mm:ss', horizontal_alignment='center')
+    primary_delta_total_style_id = create_border_style(styles_root, fill_id=light_red_fill_id, bold=True, num_fmt_code='[h]:mm:ss', horizontal_alignment='center')
+    # Колонка «Час -» без заливки й рамок.
+    gap_duration_style_id = create_border_style(styles_root, num_fmt_code='[h]:mm:ss', horizontal_alignment='center', include_border=False)
+    gap_total_style_id = create_border_style(styles_root, bold=True, num_fmt_code='[h]:mm:ss', horizontal_alignment='center', include_border=False)
     primary_column_d_style_id = create_border_style(styles_root, num_fmt_code='[h]:mm:ss', horizontal_alignment='center', include_border=False)
     primary_column_d_total_style_id = create_border_style(styles_root, bold=True, num_fmt_code='[h]:mm:ss', horizontal_alignment='center', include_border=False)
     primary_time_style_id = create_border_style(styles_root, num_fmt_code='hh:mm:ss', horizontal_alignment='center', include_border=False)
     primary_time_total_style_id = create_border_style(styles_root, bold=True, num_fmt_code='[h]:mm:ss', horizontal_alignment='center', include_border=False)
     task_table_header_style_id = create_border_style(styles_root, fill_id=yellow_fill_id, horizontal_alignment='left')
     task_table_cell_style_id = create_border_style(styles_root)
+    # Колонки розподілу офлайн-активностей: без рамок; назви колонок — Light Yellow 3, клітинки з часом — Light Gray 3.
+    light_yellow_3_fill_id = create_solid_fill(styles_root, 'FFFFF2CC')
+    light_gray_3_fill_id = create_solid_fill(styles_root, 'FFF3F3F3')
+    idle_bucket_plain_style_id = create_border_style(styles_root, horizontal_alignment='center', include_border=False)
+    idle_bucket_header_style_id = create_border_style(styles_root, fill_id=light_yellow_3_fill_id, horizontal_alignment='center', include_border=False)
+    idle_bucket_style_id = create_border_style(styles_root, fill_id=light_gray_3_fill_id, num_fmt_code='[h]:mm:ss', horizontal_alignment='center', include_border=False)
+    idle_duration_style_id = create_border_style(styles_root, num_fmt_code='[hh]:mm:ss', horizontal_alignment='left')
+    idle_bucket_total_style_id =create_border_style(styles_root, bold=True, num_fmt_code='[h]:mm:ss', horizontal_alignment='center', include_border=False)
+    idle_summary_duration_style_id = create_border_style(styles_root, num_fmt_code='[h]:mm:ss', include_border=False)
+    idle_summary_bold_style_id = create_border_style(styles_root, bold=True, include_border=False)
+    idle_summary_red_style_id = create_border_style(styles_root, bold=True, font_color='FFFF0000', num_fmt_code='[h]:mm:ss', include_border=False)
+    idle_summary_bold_duration_style_id = create_border_style(styles_root, bold=True, num_fmt_code='[h]:mm:ss', include_border=False)
 
     header_row_element = ensure_row(sheet_data, 1)
     primary_header_style_id = get_cell_style_id(header_row_element, 'H1')
     upsert_inline_string(header_row_element, 'I1', 'Завдання', style_id=primary_header_style_id)
-    upsert_inline_string(header_row_element, 'J1', 'Час -', style_id=primary_header_style_id)
-    upsert_inline_string(header_row_element, 'K1', '1хв', style_id=primary_header_style_id)
-    upsert_inline_string(header_row_element, 'L1', '2хв', style_id=primary_header_style_id)
-    upsert_inline_string(header_row_element, 'M1', '3хв', style_id=primary_header_style_id)
-    upsert_inline_string(header_row_element, 'N1', '4хв', style_id=primary_header_style_id)
-    upsert_inline_string(header_row_element, 'O1', 'Більше 5хв', style_id=primary_header_style_id)
+    # Заголовок «Час -» — як у H1, але без рамки.
+    header_cell_xfs = ensure_default_cell_xfs(styles_root)
+    header_source_index = int(primary_header_style_id) if primary_header_style_id is not None else 0
+    header_source_xf = header_cell_xfs[header_source_index] if header_source_index < len(header_cell_xfs) else header_cell_xfs[0]
+    gap_header_xf = copy.deepcopy(header_source_xf)
+    gap_header_xf.attrib['borderId'] = '0'
+    gap_header_xf.attrib['applyBorder'] = '0'
+    header_cell_xfs.append(gap_header_xf)
+    header_cell_xfs.attrib['count'] = str(len(header_cell_xfs))
+    gap_header_style_id = len(header_cell_xfs) - 1
+    upsert_inline_string(header_row_element, 'J1', 'Час на завдання', style_id=primary_header_style_id)
+    upsert_inline_string(header_row_element, f'{PAUSE_COLUMN}1', 'Час -', style_id=gap_header_style_id)
+    upsert_inline_string(header_row_element, 'L1', '1хв', style_id=primary_header_style_id)
+    upsert_inline_string(header_row_element, 'M1', '2хв', style_id=primary_header_style_id)
+    upsert_inline_string(header_row_element, 'N1', '3хв', style_id=primary_header_style_id)
+    upsert_inline_string(header_row_element, 'O1', '4хв', style_id=primary_header_style_id)
+    upsert_inline_string(header_row_element, 'P1', '5хв', style_id=primary_header_style_id)
+    upsert_inline_string(header_row_element, 'Q1', 'Пропущене', style_id=primary_header_style_id)
+    upsert_inline_string(header_row_element, 'R1', 'Неточність явар', style_id=primary_header_style_id)
 
     for row_number in range(2, primary_row_count + 1):
         row_element = ensure_row(sheet_data, row_number)
@@ -2290,25 +2645,68 @@ with tempfile.TemporaryDirectory() as temp_directory:
         convert_existing_cell_to_time(row_element, f'G{row_number}', shared_strings, primary_time_style_id)
         convert_existing_cell_to_time(row_element, f'H{row_number}', shared_strings, primary_time_style_id)
 
+    # (колонка, нижня межа в секундах, верхня межа включно або None)
     duration_bucket_columns = [
-        ('K', 'ROUND(J{row_number}*1440,0)=1'),
-        ('L', 'ROUND(J{row_number}*1440,0)=2'),
-        ('M', 'ROUND(J{row_number}*1440,0)=3'),
-        ('N', 'ROUND(J{row_number}*1440,0)=4'),
-        ('O', 'ROUND(J{row_number}*1440,0)>5'),
+        ('L', 30, 119),
+        ('M', 120, 179),
+        ('N', 180, 239),
+        ('O', 240, 299),
+        ('P', 300, None),
     ]
+    # Короткі паузи (1–29 с) не рахуються ніде, зокрема й у «Час -».
+    missed_gap_column = 'Q'
+    # Шви по 1–29 с між записами YAware усередині довгих пауз (не перерва в роботі).
+    inaccuracy_column = 'R'
+    min_pause_seconds = 30
+
+    # Паузи з колонки P як (назва, початок, кінець) у секундах — дублюються в таблицю офлайн-активностей.
+    generated_idle_rows = []
+
+    activity_timeline = load_activity_timeline(sheet_data, primary_row_count) if primary_row_count >= 2 else None
+    if activity_timeline is None:
+        print('ACTIVITY_TIMELINE_MISMATCH')
+    else:
+        windows, events = activity_timeline
+        for offset, window in enumerate(windows):
+            row_element = ensure_row(sheet_data, offset + 2)
+            upsert_numeric_cell(row_element, f'G{offset + 2}', window['start'] / 86400, style_id=primary_time_style_id)
+            upsert_numeric_cell(row_element, f'H{offset + 2}', window['end'] / 86400, style_id=primary_time_style_id)
 
     for row_number in range(3, primary_row_count + 1):
         row_element = ensure_row(sheet_data, row_number)
-        upsert_formula_cell(row_element, f'J{row_number}', f'G{row_number}-H{row_number - 1}', style_id=primary_delta_duration_style_id)
-        for column_letter_value, condition_template in duration_bucket_columns:
-            condition = condition_template.format(row_number=row_number)
-            upsert_formula_cell(
-                row_element,
-                f'{column_letter_value}{row_number}',
-                f'IF({condition},J{row_number},"")',
-                style_id=primary_delta_duration_style_id,
-            )
+        if activity_timeline is None:
+            gap_expression = f'G{row_number}-H{row_number - 1}'
+            upsert_formula_cell(row_element, f'{PAUSE_COLUMN}{row_number}', f'IF(ROUND(({gap_expression})*86400,0)>={min_pause_seconds},{gap_expression},"")', style_id=gap_duration_style_id)
+            # Без точної хронології лишається грубий розрахунок по «Час -» (час без секунд).
+            for column_letter_value, lower_bound, upper_bound in duration_bucket_columns:
+                seconds_expression = f'ROUND(N({PAUSE_COLUMN}{row_number})*86400,0)'
+                condition = f'{seconds_expression}>={lower_bound}'
+                if upper_bound is not None:
+                    condition = f'AND({condition},{seconds_expression}<={upper_bound})'
+                upsert_formula_cell(row_element, f'{column_letter_value}{row_number}', f'IF({condition},{PAUSE_COLUMN}{row_number},"")', style_id=primary_delta_duration_style_id)
+            continue
+
+        # Пауза між рядками: коротша за 30 с не рахується ніде (навіть у «Час -»); довша — офлайн-активність у L–P,
+        # проміжки без жодних подій — у «Пропущене».
+        gap_start = windows[row_number - 3]['end']
+        gap_end = windows[row_number - 2]['start']
+        gap_seconds = gap_end - gap_start
+        if gap_seconds < min_pause_seconds:
+            remove_existing_cell(row_element, f'{PAUSE_COLUMN}{row_number}')
+            continue
+        upsert_numeric_cell(row_element, f'{PAUSE_COLUMN}{row_number}', gap_seconds / 86400, style_id=gap_duration_style_id)
+        offline_seconds, uncovered_gaps = split_gap(gap_start, gap_end, events)
+        for column_letter_value, lower_bound, upper_bound in duration_bucket_columns:
+            if offline_seconds >= lower_bound and (upper_bound is None or offline_seconds <= upper_bound):
+                upsert_numeric_cell(row_element, f'{column_letter_value}{row_number}', offline_seconds / 86400, style_id=primary_delta_duration_style_id)
+        missed_gaps = [(start, end) for start, end in uncovered_gaps if end - start >= min_pause_seconds]
+        missed_seconds = sum(end - start for start, end in missed_gaps)
+        if missed_seconds:
+            upsert_numeric_cell(row_element, f'{missed_gap_column}{row_number}', missed_seconds / 86400, style_id=primary_delta_duration_style_id)
+            generated_idle_rows.extend((MISSED_IDLE_NAME, start, end) for start, end in missed_gaps)
+        inaccuracy_seconds = sum(end - start for start, end in uncovered_gaps if end - start < min_pause_seconds)
+        if inaccuracy_seconds:
+            upsert_numeric_cell(row_element, f'{inaccuracy_column}{row_number}', inaccuracy_seconds / 86400, style_id=primary_delta_duration_style_id)
 
     if primary_row_count >= 2:
         total_row_number = primary_row_count + 1
@@ -2316,32 +2714,66 @@ with tempfile.TemporaryDirectory() as temp_directory:
         upsert_formula_cell(total_row_element, f'D{total_row_number}', f'SUM(D2:D{primary_row_count})', style_id=primary_column_d_total_style_id)
         upsert_formula_cell(total_row_element, f'H{total_row_number}', f'MAX(H2:H{primary_row_count})-MIN(G2:G{primary_row_count})', style_id=primary_time_total_style_id)
         if primary_row_count >= 3:
-            upsert_formula_cell(total_row_element, f'J{total_row_number}', f'SUM(J3:J{primary_row_count})', style_id=primary_delta_total_style_id)
-            for column_letter_value, _ in duration_bucket_columns:
+            upsert_formula_cell(total_row_element, f'{PAUSE_COLUMN}{total_row_number}', f'SUM({PAUSE_COLUMN}3:{PAUSE_COLUMN}{primary_row_count})', style_id=gap_total_style_id)
+            for column_letter_value in [bucket[0] for bucket in duration_bucket_columns] + [missed_gap_column, inaccuracy_column]:
                 upsert_formula_cell(
                     total_row_element,
                     f'{column_letter_value}{total_row_number}',
                     f'SUM({column_letter_value}3:{column_letter_value}{primary_row_count})',
                     style_id=primary_delta_total_style_id,
                 )
-            add_greater_than_zero_conditional_formatting(
-                worksheet_root,
-                f'J3:J{total_row_number}',
-                light_red_dxf_id,
-                1,
-            )
-            add_greater_than_zero_conditional_formatting(
-                worksheet_root,
-                f'K3:O{total_row_number}',
-                light_red_dxf_id,
-                2,
-            )
+            # Порожні клітинки L–R теж отримують заливку, щоб колонки були зафарбовані суцільно; «Час -» лишається без заливки.
+            for row_number in range(2, total_row_number + 1):
+                row_element = ensure_row(sheet_data, row_number)
+                for column_offset in range(column_index(PAUSE_COLUMN), column_index(inaccuracy_column) + 1):
+                    cell_reference = f'{column_letter(column_offset)}{row_number}'
+                    if find_cell(row_element, cell_reference) is None:
+                        empty_style_id = gap_duration_style_id if column_offset == column_index(PAUSE_COLUMN) else primary_delta_duration_style_id
+                        upsert_inline_string(row_element, cell_reference, '', style_id=empty_style_id)
 
+    build_idle_table(
+        secondary_rows,
+        generated_idle_rows,
+        primary_employee_name,
+        primary_row_count + 1 if primary_row_count >= 3 else None,
+    )
+
+    task_time_total_cell = None
     for row_number, row_values in enumerate(secondary_rows, start=1):
         row_element = ensure_row(sheet_data, row_number)
         for offset, cell_data in enumerate(row_values):
-            cell_value = str(cell_data.get('value', ''))
             cell_reference = f'{column_letter(start_column_index + offset)}{row_number}'
+            if 'seconds' in cell_data:
+                upsert_numeric_cell(row_element, cell_reference, cell_data['seconds'] / 86400, style_id=idle_bucket_style_id)
+                continue
+            if 'durationSeconds' in cell_data:
+                upsert_numeric_cell(row_element, cell_reference, cell_data['durationSeconds'] / 86400, style_id=idle_duration_style_id)
+                continue
+            if 'formula' in cell_data:
+                upsert_formula_cell(row_element, cell_reference, cell_data['formula'], style_id=idle_bucket_total_style_id)
+                continue
+            if cell_data.get('isSpacerCell'):
+                continue
+            if cell_data.get('plain'):
+                if cell_data.get('value'):
+                    upsert_inline_string(row_element, cell_reference, str(cell_data['value']), style_id=idle_summary_bold_style_id if cell_data.get('bold') else None)
+                continue
+            if 'plainNumber' in cell_data:
+                upsert_numeric_cell(row_element, cell_reference, cell_data['plainNumber'], style_id=idle_summary_bold_style_id if cell_data.get('bold') else None)
+                continue
+            if cell_data.get('plainFormula') == TASK_TIME_TOTAL_PLACEHOLDER:
+                task_time_total_cell = (row_element, cell_reference)
+                continue
+            if 'plainFormula' in cell_data:
+                upsert_formula_cell(row_element, cell_reference, cell_data['plainFormula'], style_id=idle_summary_red_style_id if cell_data.get('red') else idle_summary_bold_duration_style_id if cell_data.get('bold') else idle_summary_duration_style_id)
+                continue
+            if 'plainSeconds' in cell_data:
+                upsert_numeric_cell(row_element, cell_reference, cell_data['plainSeconds'] / 86400, style_id=idle_summary_bold_duration_style_id if cell_data.get('bold') else idle_summary_duration_style_id)
+                continue
+            if 'idleStyle' in cell_data:
+                upsert_inline_string(row_element, cell_reference, str(cell_data.get('value', '')), style_id=idle_bucket_header_style_id if cell_data['idleStyle'] == 'header' else idle_bucket_plain_style_id)
+                continue
+            cell_value = str(cell_data.get('value', ''))
             upsert_inline_string(row_element, cell_reference, cell_value)
             style_id = summary_border_style_id
             summary_total_cell_reference = f"{column_letter(start_column_index + len(secondary_rows[0]) - 1)}2" if secondary_rows and secondary_rows[0] else None
@@ -2500,6 +2932,15 @@ with tempfile.TemporaryDirectory() as temp_directory:
         task_block_plain_style_id = create_border_style(styles_root, num_fmt_code='hh:mm:ss', include_border=False)
         task_block_filled_style_id = create_border_style(styles_root, fill_id=amber_fill_id, num_fmt_code='hh:mm:ss', include_border=False)
         task_block_outside_style_id = create_border_style(styles_root, fill_id=grey_fill_id, num_fmt_code='hh:mm:ss', include_border=False)
+        # Назва таски (колонка I) — з переносом тексту і в шаховому порядку з її часом у J:
+        # де час залитий, назва біла, і навпаки.
+        task_block_name_plain_style_id = create_border_style(styles_root, include_border=False, wrap_text=True)
+        task_block_name_filled_style_id = create_border_style(styles_root, fill_id=amber_fill_id, include_border=False, wrap_text=True)
+        task_block_name_style_ids = {
+            task_block_plain_style_id: task_block_name_filled_style_id,
+            task_block_filled_style_id: task_block_name_plain_style_id,
+            task_block_outside_style_id: task_block_name_plain_style_id,
+        }
 
         outside_duration = 0.0
         merge_references = []
@@ -2508,11 +2949,13 @@ with tempfile.TemporaryDirectory() as temp_directory:
             owner_index = segment['owner_index']
             if owner_index < 0:
                 block_style_id = task_block_outside_style_id
+                block_name = 'Поза тасками'
                 block_duration = segment_duration
                 outside_duration += segment_duration
             else:
                 task = tasks[owner_index]
                 block_style_id = task_block_filled_style_id if segment_index % 2 else task_block_plain_style_id
+                block_name = task['name']
                 if segment['absorbed']:
                     # Блок цілком поза вікном таски, але короткий — зараховуємо його
                     # повністю тій тасці, з якої працівник щойно вийшов.
@@ -2529,13 +2972,27 @@ with tempfile.TemporaryDirectory() as temp_directory:
                         outside_duration += leftover
                 task['duration'] += block_duration
 
+            # Блок таски: назва в I, час у J — обидві колонки з'єднані на всю висоту блоку.
+            block_name_style_id = task_block_name_style_ids[block_style_id]
             first_row_element = ensure_row(sheet_data, segment['first_row'])
-            upsert_numeric_cell(first_row_element, f'I{segment["first_row"]}', block_duration, style_id=block_style_id)
+            upsert_inline_string(first_row_element, f'I{segment["first_row"]}', block_name, style_id=block_name_style_id)
+            upsert_numeric_cell(first_row_element, f'J{segment["first_row"]}', block_duration, style_id=block_style_id)
             for row_number in range(segment['first_row'] + 1, segment['last_row'] + 1):
                 row_element = ensure_row(sheet_data, row_number)
-                upsert_styled_blank_cell(row_element, f'I{row_number}', block_style_id)
+                upsert_styled_blank_cell(row_element, f'I{row_number}', block_name_style_id)
+                upsert_styled_blank_cell(row_element, f'J{row_number}', block_style_id)
             if segment['last_row'] > segment['first_row']:
                 merge_references.append(f'I{segment["first_row"]}:I{segment["last_row"]}')
+                merge_references.append(f'J{segment["first_row"]}:J{segment["last_row"]}')
+
+        # Під колонкою I, у рядку підсумків основної таблиці, — сума часу блоків із J.
+        task_sum_row_number = primary_row_count + 1
+        upsert_formula_cell(
+            ensure_row(sheet_data, task_sum_row_number),
+            f'I{task_sum_row_number}',
+            f'SUM(J2:J{primary_row_count})',
+            style_id=primary_time_total_style_id,
+        )
 
         if merge_references:
             merge_cells = worksheet_root.find(f'{{{MAIN_NS}}}mergeCells')
@@ -2595,6 +3052,60 @@ with tempfile.TemporaryDirectory() as temp_directory:
             f'SUM({time_column}{first_task_row}:{time_column}{total_row_number - 1})',
             style_id=task_total_value_style_id,
         )
+        if task_time_total_cell is not None:
+            task_time_row_element, task_time_reference = task_time_total_cell
+            upsert_formula_cell(task_time_row_element, task_time_reference, f'{time_column}{total_row_number}', style_id=idle_summary_duration_style_id)
+
+    # Усі числові значення (числа, формули й текст із самих цифр, як-от «01:23:45») — по центру колонки.
+    def is_numeric_text(text):
+        text = (text or '').strip()
+        return any(ch.isdigit() for ch in text) and all(ch.isdigit() or ch in ' :.,%+-' for ch in text)
+
+    def cell_text(cell):
+        cell_type = cell.attrib.get('t')
+        if cell_type == 'inlineStr':
+            return ''.join(t.text or '' for t in cell.iter(f'{{{MAIN_NS}}}t'))
+        value_element = cell.find(f'{{{MAIN_NS}}}v')
+        if cell_type == 's' and value_element is not None and value_element.text is not None:
+            index = int(value_element.text)
+            return shared_strings[index] if index < len(shared_strings) else ''
+        return value_element.text if value_element is not None else ''
+
+    def is_numeric_cell(cell):
+        cell_type = cell.attrib.get('t')
+        if cell.find(f'{{{MAIN_NS}}}f') is not None:
+            return True
+        if cell_type in (None, 'n'):
+            return cell.find(f'{{{MAIN_NS}}}v') is not None
+        if cell_type in ('inlineStr', 's', 'str'):
+            return is_numeric_text(cell_text(cell))
+        return False
+
+    center_cell_xfs = ensure_default_cell_xfs(styles_root)
+    centered_style_ids = {}
+
+    def centered_style_id(style_id):
+        if style_id not in centered_style_ids:
+            source_xf = center_cell_xfs[style_id] if style_id < len(center_cell_xfs) else center_cell_xfs[0]
+            source_alignment = source_xf.find(f'{{{MAIN_NS}}}alignment')
+            if source_alignment is not None and source_alignment.attrib.get('horizontal') == 'center':
+                centered_style_ids[style_id] = style_id
+            else:
+                xf = ET.SubElement(center_cell_xfs, source_xf.tag, dict(source_xf.attrib))
+                alignment_attributes = dict(source_alignment.attrib) if source_alignment is not None else {}
+                alignment_attributes['horizontal'] = 'center'
+                ET.SubElement(xf, f'{{{MAIN_NS}}}alignment', alignment_attributes)
+                for child in source_xf:
+                    if child.tag != f'{{{MAIN_NS}}}alignment':
+                        xf.append(copy.deepcopy(child))
+                xf.attrib['applyAlignment'] = '1'
+                centered_style_ids[style_id] = len(center_cell_xfs) - 1
+                center_cell_xfs.attrib['count'] = str(len(center_cell_xfs))
+        return centered_style_ids[style_id]
+
+    for cell in sheet_data.iter(f'{{{MAIN_NS}}}c'):
+        if is_numeric_cell(cell):
+            cell.attrib['s'] = str(centered_style_id(int(cell.attrib.get('s', '0'))))
 
     dimension = worksheet_root.find(f'{{{MAIN_NS}}}dimension')
     if dimension is not None:
@@ -2631,29 +3142,42 @@ if task_coverage_path:
   // тому запускаємо його з тимчасового файлу.
   const pythonScriptPath = path.join(outputDirectory, `.yaware-combine-${Date.now()}.py`);
   await fs.writeFile(pythonScriptPath, pythonScript, 'utf8');
+  // Хронологія завелика для змінної середовища, тому передаємо її файлом.
+  const activityTimelinePath = path.join(outputDirectory, `.yaware-timeline-${Date.now()}.json`);
+  await fs.writeFile(activityTimelinePath, JSON.stringify(activityTimeline), 'utf8');
 
+  let pythonOutput = '';
   try {
-    await runCombinePythonScript(pythonScriptPath, combinedExcelPath, downloadedFilePath, secondaryRows, apiReportDate);
+    pythonOutput = await runCombinePythonScript(pythonScriptPath, combinedExcelPath, downloadedFilePath, secondaryRows, apiReportDate, activityTimelinePath);
   } finally {
     await fs.rm(pythonScriptPath, { force: true }).catch(() => null);
+    await fs.rm(activityTimelinePath, { force: true }).catch(() => null);
+  }
+
+  if (String(pythonOutput).includes('ACTIVITY_TIMELINE_MISMATCH')) {
+    reportWarning('точний час дій з API не збігся зі звітом, паузи пораховано без секунд, «Пропущене» не заповнено.');
   }
 
   return combinedExcelPath;
 }
 
-async function runCombinePythonScript(pythonScriptPath, combinedExcelPath, downloadedFilePath, secondaryRows, apiReportDate) {
+async function runCombinePythonScript(pythonScriptPath, combinedExcelPath, downloadedFilePath, secondaryRows, apiReportDate, activityTimelinePath) {
   const coveragePath = path.join(path.dirname(combinedExcelPath), `.yaware-coverage-${Date.now()}.json`);
 
   try {
-    await execFileAsync(pythonPath, [pythonScriptPath], {
+    const { stdout } = await execFileAsync(pythonPath, [pythonScriptPath], {
       env: {
         ...process.env,
         TASK_COVERAGE_PATH: coveragePath,
+        ACTIVITY_TIMELINE_PATH: activityTimelinePath,
+        REPORT_PERIOD: apiReportDate,
         OUTPUT_XLSX_PATH: combinedExcelPath,
         SOURCE_XLSX_PATH: downloadedFilePath,
         SECONDARY_ROWS_JSON: JSON.stringify(secondaryRows.map((row) => row.map((cell) => ({
           value: cell.value ?? '',
           isSectionTitle: Boolean(cell.isSectionTitle),
+          // Порожній відступ між таблицями — без рамки.
+          isSpacerCell: Boolean(cell.isSpacerCell),
         })))),
         TASK_TABLE_ROWS_JSON: JSON.stringify(buildTaskTableRows().map((row) => row.map((cell) => ({
           value: cell.value ?? '',
@@ -2674,6 +3198,7 @@ async function runCombinePythonScript(pythonScriptPath, combinedExcelPath, downl
     });
 
     outsideTasksSeconds = await readTaskCoverage(coveragePath);
+    return stdout;
   } finally {
     await fs.rm(coveragePath, { force: true }).catch(() => null);
   }
@@ -2704,20 +3229,96 @@ function emptyDayError() {
   return error;
 }
 
-async function saveCombinedExcel(summaryPayload, dayReportPayload, downloadedFilePath, outputDirectory, apiReportDate, reportEmployeeName = '', idleActivitiesRows = null) {
-  const fileExtension = path.extname(downloadedFilePath).toLowerCase();
+async function saveCombinedExcel(summaryPayload, dayReportPayload, downloadedFilePath, outputDirectory, apiReportDate, reportEmployeeName = '', idleActivitiesRows = null, activityTimeline = null) {
+  // Формат — за вмістом, а не за іменем: без локалі (LANG) Chromium не розбирає
+  // ім'я з Content-Disposition і зберігає файл як «download» без розширення,
+  // і справжній xlsx ішов би в HTML-гілку як «порожній день».
+  const fileHeader = await fs.readFile(downloadedFilePath);
+  const isZipArchive = fileHeader.length >= 4 && fileHeader[0] === 0x50 && fileHeader[1] === 0x4b;
 
-  if (fileExtension === '.xlsx') {
-    // У день без активності Yaware віддає файл з розширенням .xlsx, який насправді
-    // не є zip-архівом — Python-скрипт падав би на zipfile.BadZipFile.
-    const fileHeader = await fs.readFile(downloadedFilePath);
-    if (fileHeader.length < 4 || fileHeader[0] !== 0x50 || fileHeader[1] !== 0x4b) {
-      throw emptyDayError();
-    }
-    return saveCombinedXlsx(summaryPayload, dayReportPayload, downloadedFilePath, outputDirectory, apiReportDate, reportEmployeeName, idleActivitiesRows);
+  if (isZipArchive) {
+    return saveCombinedXlsx(summaryPayload, dayReportPayload, downloadedFilePath, outputDirectory, apiReportDate, reportEmployeeName, idleActivitiesRows, activityTimeline);
+  }
+
+  // У день без активності Yaware віддає файл з розширенням .xlsx, який насправді
+  // не є zip-архівом — Python-скрипт падав би на zipfile.BadZipFile.
+  if (path.extname(downloadedFilePath).toLowerCase() === '.xlsx') {
+    throw emptyDayError();
   }
 
   return saveCombinedHtmlExcel(summaryPayload, dayReportPayload, downloadedFilePath, outputDirectory, apiReportDate, reportEmployeeName, idleActivitiesRows);
+}
+
+/**
+ * Стежить за XHR/fetch сторінки від моменту створення. settle() чекає, поки
+ * сторінка довантажить те, що запустили дії: після останнього запиту минуло
+ * quietMs і нічого не в польоті. Замінює фіксовані паузи після networkidle —
+ * той після першого затишшя сторінки резолвиться миттєво і нічого не чекав.
+ *
+ * Якщо жоден запит так і не стартував, settle() чекає fallbackMs — стільки,
+ * скільки раніше тривала фіксована пауза. Запит, що висить довше за
+ * STUCK_REQUEST_MS (довге опитування), тишу не блокує; maxMs — загальна стеля.
+ */
+const STUCK_REQUEST_MS = 5_000;
+
+function trackDataRequests(page) {
+  const inFlight = new Map();
+  let lastActivityAt = 0;
+  let seenRequest = false;
+
+  // Лише запити самого Yaware (сайт і GraphQL data-api-3.yaware.com): аналітика
+  // сторінки (Amplitude, GA, LinkedIn) шле XHR постійно і не має відношення до даних звіту.
+  const isDataRequest = (request) => ['xhr', 'fetch'].includes(request.resourceType())
+    && /(^|\.)yaware\.com(\.ua)?$/.test(new URL(request.url()).hostname);
+  const onRequest = (request) => {
+    if (!isDataRequest(request)) {
+      return;
+    }
+    seenRequest = true;
+    lastActivityAt = Date.now();
+    inFlight.set(request, lastActivityAt);
+    logTiming(`  xhr ${request.method()} ${request.url().slice(0, 160)}`);
+  };
+  const onDone = (request) => {
+    if (inFlight.delete(request)) {
+      lastActivityAt = Date.now();
+    }
+  };
+
+  page.on('request', onRequest);
+  page.on('requestfinished', onDone);
+  page.on('requestfailed', onDone);
+
+  return {
+    async settle({ quietMs = 700, fallbackMs = 3_000, maxMs = 15_000 } = {}) {
+      const settleStartedAt = Date.now();
+      try {
+        for (;;) {
+          const now = Date.now();
+          if (now - settleStartedAt >= maxMs) {
+            logTiming('  settle: стеля очікування');
+            return;
+          }
+          if (!seenRequest) {
+            if (now - settleStartedAt >= fallbackMs) {
+              return;
+            }
+          } else {
+            const activeCount = [...inFlight.values()].filter((startedAt) => now - startedAt < STUCK_REQUEST_MS).length;
+            const quietSince = Math.max(lastActivityAt, settleStartedAt);
+            if (activeCount === 0 && now - quietSince >= quietMs) {
+              return;
+            }
+          }
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      } finally {
+        page.off('request', onRequest);
+        page.off('requestfinished', onDone);
+        page.off('requestfailed', onDone);
+      }
+    },
+  };
 }
 
 // Strip "Name, email@host" → "Name" and return a lowercase word-set.
@@ -2798,6 +3399,8 @@ async function setIdleActivitiesUserFilter(page, targetName) {
     return;
   }
 
+  const requests = trackDataRequests(page);
+
   // Strategy: check target FIRST (keeps at least 1 selection, menu stays open),
   // then uncheck all other options.
   if (!targetOption.checked) {
@@ -2823,13 +3426,12 @@ async function setIdleActivitiesUserFilter(page, targetName) {
   }
 
   await page.locator('body').click({ position: { x: 0, y: 0 } }).catch(() => null);
-  await page.waitForTimeout(500);
-  await page.waitForLoadState('networkidle').catch(() => null);
-  await page.waitForTimeout(1_500);
+  await requests.settle();
 }
 
 async function setIdleActivitiesDate(page, reportDate) {
   const [targetDay, targetMonth, targetYear] = reportDate.split('.').map(Number);
+  const requests = trackDataRequests(page);
 
   const datePickerWrapper = page.locator('.date-picker-wrapper').first();
   await datePickerWrapper.waitFor({ state: 'visible', timeout: 30_000 });
@@ -2897,17 +3499,20 @@ async function setIdleActivitiesDate(page, reportDate) {
     }
   }
 
-  await page.waitForLoadState('networkidle').catch(() => null);
-  await page.waitForTimeout(2_000);
+  await requests.settle({ fallbackMs: diffDays === 0 ? 0 : 2_000 });
 }
 
 async function downloadIdleActivitiesXls(page, reportDate, employeeName) {
+  const pageLoadRequests = trackDataRequests(page);
   await page.goto(IDLE_ACTIVITIES_URL, { waitUntil: 'domcontentloaded' });
   await page.waitForLoadState('networkidle').catch(() => null);
-  await page.waitForTimeout(4_000);
+  await pageLoadRequests.settle({ quietMs: 1_000, fallbackMs: 4_000 });
 
+  logTiming('офлайн-звіт: сторінка відкрита');
   await setIdleActivitiesDate(page, reportDate);
+  logTiming('офлайн-звіт: дату виставлено');
   await setIdleActivitiesUserFilter(page, employeeName);
+  logTiming('офлайн-звіт: працівника вибрано');
 
   const exportBtn = page
       .locator('button[title="Експорт в xls"]')
@@ -2915,10 +3520,6 @@ async function downloadIdleActivitiesXls(page, reportDate, employeeName) {
       .first();
 
   await exportBtn.waitFor({ state: 'visible', timeout: 30_000 });
-
-  // Wait for the grid to finish loading before exporting
-  await page.waitForLoadState('networkidle').catch(() => null);
-  await page.waitForTimeout(1_500);
 
   const downloadPromise = page.waitForEvent('download', { timeout: 60_000 }).catch(() => null);
   await exportBtn.click();
@@ -3068,6 +3669,20 @@ const context = await browser.newContext({
   downloadsPath: downloadDirectory,
 });
 
+// Аналітика й реклама на сторінках Yaware не потрібні для звіту, але без
+// кінця шлють запити: networkidle після входу через них чекав повний таймаут
+// (30 с замість ~6). Обриваємо їх на рівні браузера.
+const TRACKER_HOST_PATTERN = /(^|\.)(amplitude\.com|google-analytics\.com|googletagmanager\.com|doubleclick\.net|linkedin\.com|licdn\.com|facebook\.(com|net)|hotjar\.(com|io)|clarity\.ms|yandex\.(ru|net)|bing\.com)$/;
+const blockedTrackerHosts = new Set();
+await context.route((url) => TRACKER_HOST_PATTERN.test(url.hostname), (route) => {
+  const { hostname } = new URL(route.request().url());
+  if (!blockedTrackerHosts.has(hostname)) {
+    blockedTrackerHosts.add(hostname);
+    logTiming(`  трекер заблоковано: ${hostname}`);
+  }
+  return route.abort();
+});
+
 const page = await context.newPage();
 
 async function performLogin(page, email, password) {
@@ -3159,222 +3774,130 @@ async function performLogin(page, email, password) {
   }
 }
 
-async function setReportDate(page, reportDate) {
-  const fromInput = page.locator('#rangeFrom');
-  const toInput = page.locator('#rangeTo');
-
-  try {
-    await fromInput.waitFor({ state: 'visible', timeout: 30_000 });
-    await toInput.waitFor({ state: 'visible', timeout: 30_000 });
-  } catch (cause) {
-    // Поле дати не з'явилось — сторінка звітів не відкрилась для цього акаунта
-    // (типово: роль співробітника без доступу до звітів), а не збій скрипта.
-    const error = new Error('Сторінка звітів Yaware недоступна для цього акаунта — не з\'явилось поле вибору дати. Найімовірніше, акаунту не надано права на перегляд звітів: зверніться до адміністратора Yaware.');
-    error.code = 'REPORTS_PAGE_UNAVAILABLE';
-    error.cause = cause;
-    throw error;
-  }
-
-  await page.evaluate((date) => {
-    const parseDate = (rawDate) => {
-      const [day, month, year] = rawDate.split('.').map(Number);
-      return new Date(year, month - 1, day);
-    };
-
-    const applyDate = (selector) => {
-      const input = document.querySelector(selector);
-      if (!(input instanceof HTMLInputElement)) {
-        throw new Error(`Could not find input ${selector}`);
-      }
-
-      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-      const parsedDate = parseDate(date);
-      const jquery = typeof window.$ === 'function' ? window.$ : null;
-      const $input = jquery ? jquery(input) : null;
-
-      if ($input && typeof $input.datepicker === 'function') {
-        $input.datepicker('setDate', parsedDate);
-        $input.datepicker('update', parsedDate);
-        $input.datepicker('hide');
-      }
-
-      nativeInputValueSetter?.call(input, date);
-      input.setAttribute('value', date);
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      input.dispatchEvent(new Event('change', { bubbles: true }));
-      input.dispatchEvent(new Event('blur', { bubbles: true }));
-
-      $input?.trigger('changeDate');
-      $input?.trigger('change');
-      $input?.trigger('blur');
-    };
-
-    applyDate('#rangeFrom');
-    applyDate('#rangeTo');
-  }, reportDate);
-
-  await page.waitForFunction(
-      ({ expectedDate }) => {
-        const fromValue = document.querySelector('#rangeFrom')?.value;
-        const toValue = document.querySelector('#rangeTo')?.value;
-        return fromValue === expectedDate && toValue === expectedDate;
-      },
-      { expectedDate: reportDate },
-  );
-
-  await page.locator('body').click({ position: { x: 0, y: 0 } }).catch(() => null);
-  await page.waitForLoadState('networkidle').catch(() => null);
-  await page.waitForTimeout(3_000);
+// Сторінка звітів з 2026-10-28 — Vue + Element UI (як офлайн-звіт), а не ExtJS:
+// дата — el-date-picker типу daterange, працівник — ywr-select з іменами,
+// таблиця — el-table, експорт формує xlsx у браузері з GraphQL data-api-3.
+function reportPageChangedError(what, cause) {
+  const error = new Error(`На сторінці звітів Yaware не знайдено ${what}. Найімовірніше, Yaware змінив сторінку — скрипт потребує оновлення; рідше причина в тому, що акаунту не надано доступу до звітів.`);
+  error.code = 'REPORTS_PAGE_UNAVAILABLE';
+  error.cause = cause;
+  return error;
 }
 
-async function setEmployeeFilter(page, employeeId) {
-  const userFilter = page.locator('.user_filter').first();
-  const dropdownButton = userFilter.locator('button.multiselect.dropdown-toggle').first();
-  const searchInput = userFilter.locator('.multiselect-search').first();
+async function setReportDate(page, reportDate) {
+  const rangeEditor = page.locator('.el-range-editor').first();
 
-  await userFilter.waitFor({ state: 'visible', timeout: 30_000 });
-  await dropdownButton.click();
-  await searchInput.waitFor({ state: 'visible', timeout: 10_000 });
-  await searchInput.fill(employeeId);
+  try {
+    await rangeEditor.waitFor({ state: 'visible', timeout: 30_000 });
+  } catch (cause) {
+    throw reportPageChangedError('поле вибору дати', cause);
+  }
 
-  await page.waitForFunction((targetId) => {
-    const items = [...document.querySelectorAll('.user_filter .multiselect-container input[type="checkbox"]')];
-    return items.some((item) => item.value === targetId);
-  }, employeeId);
-
-  const targetItem = userFilter
-      .locator('.multiselect-container li:not(.multiselect-item)')
-      .filter({ has: page.locator(`input[type="checkbox"][value="${employeeId}"]`) })
-      .first();
-  const targetCheckbox = targetItem.locator('input[type="checkbox"]').first();
-  const targetLabel = targetItem.locator('label.checkbox').first();
-
-  const targetOption = await page.evaluate((targetId) => {
-    const select = document.querySelector('#user_select');
-    if (!(select instanceof HTMLSelectElement)) {
-      throw new Error('Could not find #user_select employee filter.');
+  const [day, month, year] = reportDate.split('.').map(Number);
+  const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  const requests = trackDataRequests(page);
+  // Дата застосована, коли сторінка запитала дані саме за неї: внутрішнє
+  // значення пікера нормалізується в часовому поясі акаунта і з датою
+  // браузера напряму не порівнюється.
+  const dateApplied = page.waitForRequest((request) => {
+    const body = request.postData() || '';
+    return request.url().includes('/graphql/')
+      && body.includes(`"fromISO":"${isoDate}"`)
+      && body.includes(`"toISO":"${isoDate}"`);
+  }, { timeout: 15_000 });
+  dateApplied.catch(() => null);
+  // Обгортка date-range-picker пробрасує onInput([від, до]) у фільтр звіту —
+  // так само, як вибір дати в календарі.
+  await page.evaluate(({ y, m, d }) => {
+    const picker = document.querySelector('.el-range-editor')?.__vue__;
+    if (!picker || typeof picker.onInput !== 'function') {
+      throw new Error('Could not find the date range picker component.');
     }
+    const date = new Date(y, m - 1, d);
+    picker.onInput([date, new Date(date)]);
+  }, { y: year, m: month, d: day });
 
-    const option = [...select.options].find((item) => item.value === targetId);
-    if (!option) {
-      throw new Error(`Could not find employee option by id: ${targetId}`);
-    }
+  try {
+    await dateApplied;
+  } catch (cause) {
+    throw reportPageChangedError(`запиту даних за ${reportDate} після вибору дати`, cause);
+  }
 
-    return {
-      value: option.value,
-      label: option.text.trim(),
-    };
-  }, employeeId);
+  await requests.settle();
+}
 
-  const { value: targetValue, label: targetLabelText } = targetOption;
+async function setEmployeeFilter(page, employeeName) {
+  // Груп і користувачів — два однакові ywr-select; потрібен той, де є працівник.
+  const userSelect = page
+      .locator('.ywr-report-filter__select')
+      .filter({ has: page.locator('.ywr-select-list__option') })
+      .last();
 
-  await page.evaluate((selectedValue) => {
-    const checkboxes = document.querySelectorAll('.user_filter .multiselect-container input[type="checkbox"]');
-    checkboxes.forEach((checkbox) => {
-      if (!(checkbox instanceof HTMLInputElement)) {
-        return;
-      }
+  try {
+    await userSelect.locator('.ywr-select-btn').waitFor({ state: 'visible', timeout: 30_000 });
+  } catch (cause) {
+    throw reportPageChangedError('фільтр працівників', cause);
+  }
 
-      const isTarget = checkbox.value === selectedValue;
-      if (checkbox.checked && !isTarget) {
-        checkbox.click();
-      }
-    });
-  }, targetValue);
+  await userSelect.locator('.ywr-select-btn').click();
+  const menu = userSelect.locator('.ywr-select-menu');
+  await menu.waitFor({ state: 'visible', timeout: 10_000 });
 
-  await targetItem.waitFor({ state: 'visible', timeout: 10_000 });
+  const options = await menu.locator('.ywr-select-list__option').evaluateAll((items) => items.map((item) => ({
+    title: item.getAttribute('title') || '',
+    checked: Boolean(item.querySelector('input[type="checkbox"]')?.checked),
+  })));
+  // У списку «Ім'я Прізвище», в API — «Прізвище Ім'я»: зіставляємо за словами.
+  const matches = options.filter((option) => idleNamesMatch(option.title, employeeName));
+  if (matches.length !== 1) {
+    await page.locator('body').click({ position: { x: 0, y: 0 } }).catch(() => null);
+    throw new Error(matches.length === 0
+      ? `У фільтрі працівників Yaware немає «${employeeName}».`
+      : `У фільтрі працівників Yaware кілька збігів для «${employeeName}».`);
+  }
+  const target = matches[0];
 
-  if (!(await targetCheckbox.isChecked())) {
-    await targetItem.scrollIntoViewIfNeeded().catch(() => null);
-
-    try {
-      await targetLabel.click({ timeout: 3_000 });
-    } catch {
-      await page.evaluate((selectedValue) => {
-        const checkbox = document.querySelector(`.user_filter .multiselect-container input[type="checkbox"][value="${selectedValue}"]`);
-        if (!(checkbox instanceof HTMLInputElement)) {
-          throw new Error(`Could not find employee checkbox by id: ${selectedValue}`);
-        }
-
-        if (!checkbox.checked) {
-          checkbox.click();
-        }
-      }, targetValue);
+  const requests = trackDataRequests(page);
+  // Чекбокси сховані стилями — клікаємо підписи. Спершу ціль, щоб вибір
+  // ніколи не ставав порожнім, потім знімаємо решту.
+  if (!target.checked) {
+    await menu.locator(`li[title="${target.title}"]`).first().locator('label').click();
+  }
+  for (const option of options) {
+    if (option.checked && option.title !== target.title) {
+      await menu.locator(`li[title="${option.title}"]`).first().locator('label').click();
     }
   }
 
-  await page.waitForFunction(
-      ({ expectedValue }) => {
-        const checkbox = document.querySelector(`.user_filter .multiselect-container input[type="checkbox"][value="${expectedValue}"]`);
-        return checkbox instanceof HTMLInputElement && checkbox.checked;
-      },
-      { expectedValue: targetValue },
-  );
+  await page.waitForFunction((targetTitle) => {
+    const checked = [...document.querySelectorAll('.ywr-select-list__option')]
+        .filter((item) => item.querySelector('input[type="checkbox"]')?.checked)
+        .map((item) => item.getAttribute('title'));
+    return checked.length === 1 && checked[0] === targetTitle;
+  }, target.title, { timeout: 10_000 });
 
   await page.locator('body').click({ position: { x: 0, y: 0 } }).catch(() => null);
-
-  await page.waitForFunction(
-      ({ expectedName, expectedValue }) => {
-        const select = document.querySelector('#user_select');
-        if (!(select instanceof HTMLSelectElement)) {
-          return false;
-        }
-
-        const selectedOptions = [...select.selectedOptions];
-        const buttonText = document.querySelector('.user_filter .multiselect.dropdown-toggle span')?.textContent?.trim();
-
-        return (
-            selectedOptions.length === 1
-            && selectedOptions[0]?.value === expectedValue
-            && selectedOptions[0]?.text.trim() === expectedName
-            && buttonText === expectedName
-        );
-      },
-      { expectedName: targetLabelText, expectedValue: targetValue },
-  );
-
-  await page.waitForLoadState('networkidle').catch(() => null);
-  await page.waitForTimeout(3_000);
+  await requests.settle();
 }
 
 async function filterByFirstAction(page) {
-  const firstActionHeader = page
-      .locator('.x-column-header', { has: page.locator('.x-column-header-text', { hasText: 'Перша дія' }) })
-      .first();
+  const firstActionHeader = page.locator('th', { has: page.locator('.column-content', { hasText: 'Перша дія' }) }).first();
 
-  await firstActionHeader.waitFor({ state: 'visible', timeout: 30_000 });
-
-  const headerId = await firstActionHeader.getAttribute('id');
-  if (!headerId) {
-    throw new Error('Could not determine the "Перша дія" column id.');
+  try {
+    await firstActionHeader.waitFor({ state: 'visible', timeout: 30_000 });
+  } catch (cause) {
+    throw reportPageChangedError('колонку «Перша дія»', cause);
   }
 
-  const firstActionHeaderInner = firstActionHeader.locator('.x-column-header-inner').first();
-  const previousHeaderClass = (await firstActionHeader.getAttribute('class')) || '';
-
-  await Promise.all([
-    page.waitForLoadState('networkidle').catch(() => null),
-    firstActionHeaderInner.click(),
-  ]);
-
-  await page.waitForFunction(
-      ({ headerSelector, previousClass }) => {
-        const header = document.querySelector(headerSelector);
-        if (!header) {
-          return false;
-        }
-
-        const currentClass = header.getAttribute('class') || '';
-        const sortDirections = ['x-column-header-sort-ASC', 'x-column-header-sort-DESC'];
-        return currentClass !== previousClass || sortDirections.some((direction) => currentClass.includes(direction));
-      },
-      {
-        headerSelector: `#${headerId}`,
-        previousClass: previousHeaderClass,
-      },
-  ).catch(() => null);
-
-  await page.waitForTimeout(3_000);
+  // el-table перемикає сортування по колу: ascending → descending → без сортування.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (((await firstActionHeader.getAttribute('class')) || '').split(/\s+/).includes('ascending')) {
+      return;
+    }
+    const requests = trackDataRequests(page);
+    await firstActionHeader.locator('.cell').click();
+    await requests.settle();
+  }
 }
 
 try {
@@ -3419,18 +3942,32 @@ try {
   const employeeId = employee.id;
   updateProgress(40, 'Отримано ID працівника');
 
+  // Дані GraphQL не залежать від фільтрів сторінки — тягнемо їх, поки браузер
+  // налаштовує фільтри й вивантажує Excel. Помилку перехопить await нижче;
+  // порожній catch лише не дає Node вбити процес як «необроблену» відмову.
+  const reportPayloadsPromise = Promise.all([
+    fetchSummaryByPeriod(API_REPORT_DATE, employeeId),
+    fetchReportByDay(API_REPORT_DATE, employeeId),
+  ]);
+  reportPayloadsPromise.catch(() => null);
+  const activityTimelinePromise = fetchActivityTimeline(API_REPORT_DATE, employeeId).catch((timelineError) => {
+    reportWarning(`не вдалось отримати точний час дій: ${timelineError.message}`);
+    return null;
+  });
+
   await page.goto(REPORT_URL, { waitUntil: 'domcontentloaded' });
   updateProgress(52, 'Налаштування фільтрів звіту');
 
   await setReportDate(page, REPORT_DATE);
-  await setEmployeeFilter(page, employeeId);
+  logTiming('дату виставлено');
+  await setEmployeeFilter(page, employee.name);
+  logTiming('працівника вибрано');
   await filterByFirstAction(page);
   updateProgress(65, 'Фільтри застосовано');
 
   const exportButton = page
-      .locator('#button-1042')
-      .or(page.getByRole('button', { name: EXPORT_TEXT }))
-      .or(page.locator('span.x-btn-inner', { hasText: EXPORT_TEXT }).locator('..').locator('..').locator('..'))
+      .locator('button[title="Експорт в xls"]')
+      .or(page.locator('.yaware-grid-toolbar__button--xls'))
       .first();
 
   await exportButton.waitFor({ state: 'visible', timeout: 30_000 });
@@ -3448,10 +3985,7 @@ try {
 
     let idleXlsPath = null;
     try {
-      const [summaryPayload, dayReportPayload] = await Promise.all([
-        fetchSummaryByPeriod(API_REPORT_DATE, employeeId),
-        fetchReportByDay(API_REPORT_DATE, employeeId),
-      ]);
+      const [summaryPayload, dayReportPayload] = await reportPayloadsPromise;
       updateProgress(88, 'Завантаження звіту офлайн активності');
       let idleActivitiesRows = null;
       try {
@@ -3469,6 +4003,10 @@ try {
             if (nameFromE2) idleEmployeeName = nameFromE2;
           }
         } catch (_nameErr) {}
+        // Лише після основного вивантаження і в тій самій вкладці: фільтр
+        // користувачів у Yaware спільний для сесії, і паралельна вкладка з
+        // офлайн-звітом підміняла його основному — Excel виходив по всіх
+        // працівниках (перевірено заміром на проді 2026-10-12).
         idleXlsPath = await downloadIdleActivitiesXls(page, REPORT_DATE, idleEmployeeName);
         if (idleXlsPath) {
           const allIdleRows = await parseIdleActivitiesXls(idleXlsPath);
@@ -3497,7 +4035,8 @@ try {
       } catch (idleErr) {
         reportWarning(`не вдалось завантажити звіт офлайн активності: ${idleErr.message}`);
       }
-      const combinedExcelPath = await saveCombinedExcel(summaryPayload, dayReportPayload, temporarySourcePath, downloadDirectory, API_REPORT_DATE, employee.name, idleActivitiesRows);
+      const activityTimeline = await activityTimelinePromise;
+      const combinedExcelPath = await saveCombinedExcel(summaryPayload, dayReportPayload, temporarySourcePath, downloadDirectory, API_REPORT_DATE, employee.name, idleActivitiesRows, activityTimeline);
       if (SHOULD_PERSIST_CREDENTIALS) {
         await saveCredentials(yawareEmail, yawarePassword);
       }
